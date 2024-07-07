@@ -203,6 +203,20 @@ pub async fn mavlink_post(
 }
 
 #[api_v2_operation]
+/// Drone Mission
+pub async fn mission(req: HttpRequest) -> actix_web::Result<HttpResponse> {
+    let path = req.match_info().query("path");
+    let message = data::messages().pointer(path);
+    ok_response(message).await
+}
+
+#[api_v2_operation]
+/// Drone Assembly
+pub async fn assembly() -> actix_web::Result<HttpResponse> {
+    ok_response("assemb".to_string()).await
+}
+
+#[api_v2_operation]
 /// Websocket used to receive and send MAVLink messages asynchronously
 pub async fn websocket(
     req: HttpRequest,

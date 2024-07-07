@@ -60,6 +60,8 @@ pub fn run(server_address: &str, mavlink_vehicle: &MAVLinkVehicleArcMutex) {
                 web::get().to(endpoints::root),
             )
             .route("/info", web::get().to(endpoints::info))
+            .route("/mission", web::get().to(endpoints::mission))
+            .route("/assembly", web::get().to(endpoints::assembly))
             // Be sure to have default as the latest endpoint, otherwise it does not work
             .service(v1)
             .service(default)
