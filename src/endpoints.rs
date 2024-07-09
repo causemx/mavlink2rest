@@ -51,6 +51,19 @@ pub struct MAVLinkHelperQuery {
     name: String,
 }
 
+#[derive(Apiv2Schema, Serialize, Deserialize)]
+pub struct MissionItem {
+    lat: f32,
+    lon: f32,
+    alt: f32
+}
+
+#[derive(Apiv2Schema, Serialize, Deserialize)]
+pub struct Mission {
+    id: u32,
+    items: Vec<MissionItem>,
+}
+
 fn load_html_file(filename: &str) -> Option<String> {
     if let Some(file) = HTML_DIST.get_file(filename) {
         return Some(file.contents_utf8().unwrap().to_string());
@@ -204,10 +217,12 @@ pub async fn mavlink_post(
 
 #[api_v2_operation]
 /// Drone Mission
-pub async fn mission(req: HttpRequest) -> actix_web::Result<HttpResponse> {
-    let path = req.match_info().query("path");
-    let message = data::messages().pointer(path);
-    ok_response(message).await
+pub async fn mission_post(mission: web::Json<Mission>) -> actix_web::Result<HttpResponse> {
+    println!("Received mission id: {}", mission.id);
+    for item in &mission.items {
+        println!("Mission Item: {}, {}, {}", item.lat, item.lon, item.alt);
+    } 
+    ok_response("Ok".to_string()).await
 }
 
 #[api_v2_operation]

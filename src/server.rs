@@ -26,6 +26,7 @@ fn add_v1_paths(scope: Scope) -> Scope {
         .route("/helper/mavlink", web::get().to(endpoints::helper_mavlink))
         .route("/mavlink", web::get().to(endpoints::mavlink))
         .route("/mavlink", web::post().to(endpoints::mavlink_post))
+        .route("/mission", web::post().to(endpoints::mission_post))
         .route(r"/mavlink/{path:.*}", web::get().to(endpoints::mavlink))
         .service(web::resource("/ws/mavlink").route(web::get().to(endpoints::websocket)))
 }
@@ -60,8 +61,6 @@ pub fn run(server_address: &str, mavlink_vehicle: &MAVLinkVehicleArcMutex) {
                 web::get().to(endpoints::root),
             )
             .route("/info", web::get().to(endpoints::info))
-            .route("/mission", web::get().to(endpoints::mission))
-            .route("/assembly", web::get().to(endpoints::assembly))
             // Be sure to have default as the latest endpoint, otherwise it does not work
             .service(v1)
             .service(default)
