@@ -1,5 +1,4 @@
 use std::path::Path;
-
 use actix_web::{
     web::{self, Json},
     HttpRequest, HttpResponse,
@@ -51,19 +50,6 @@ pub struct MAVLinkHelperQuery {
     name: String,
 }
 
-#[derive(Apiv2Schema, Serialize, Deserialize)]
-pub struct MissionItem {
-    lat: f32,
-    lon: f32,
-    alt: f32
-}
-
-#[derive(Apiv2Schema, Serialize, Deserialize)]
-pub struct Mission {
-    id: u32,
-    items: Vec<MissionItem>,
-}
-
 fn load_html_file(filename: &str) -> Option<String> {
     if let Some(file) = HTML_DIST.get_file(filename) {
         return Some(file.contents_utf8().unwrap().to_string());
@@ -108,6 +94,87 @@ pub async fn info() -> Json<Info> {
     };
 
     Json(info)
+}
+
+#[api_v2_operation]
+/// Return gps
+pub async fn get_gps(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
+    let result = match mavlink::ardupilotmega::MavMessage::message_id_from_name("GPS_RAW_INT") {
+        Ok(id) => mavlink::Message::default_message_from_id(id),
+        Err(error) => Err(error),
+    };
+    match result {
+        Ok(result) => {
+            let msg = match result {
+                mavlink::ardupilotmega::MavMessage::common(msg) => {
+                    parse_query(&data::MAVLinkMessage {
+                        header: mavlink::MavHeader::default(),
+                        message: msg,
+                    })
+                }
+                msg => parse_query(&data::MAVLinkMessage {
+                    header: mavlink::MavHeader::default(),
+                    message: msg,
+                }),
+            };
+            ok_response(msg).await   
+        }
+        Err(content) => not_found_response(parse_query(&content)).await,
+    }
+}
+
+#[api_v2_operation]
+/// Return speed
+pub async fn get_speed(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
+    let result = match mavlink::ardupilotmega::MavMessage::message_id_from_name("VFR_HUD") {
+        Ok(id) => mavlink::Message::default_message_from_id(id),
+        Err(error) => Err(error),
+    };
+    match result {
+        Ok(result) => {
+            let msg = match result {
+                mavlink::ardupilotmega::MavMessage::common(msg) => {
+                    parse_query(&data::MAVLinkMessage {
+                        header: mavlink::MavHeader::default(),
+                        message: msg,
+                    })
+                }
+                msg => parse_query(&data::MAVLinkMessage {
+                    header: mavlink::MavHeader::default(),
+                    message: msg,
+                }),
+            };
+            ok_response(msg).await
+        }
+        Err(content) => not_found_response(parse_query(&content)).await,
+    }
+}
+
+#[api_v2_operation]
+/// Return voltage
+pub async fn get_voltage(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
+    let result = match mavlink::ardupilotmega::MavMessage::message_id_from_name("SYS_STATUS") {
+        Ok(id) => mavlink::Message::default_message_from_id(id),
+        Err(error) => Err(error),
+    };
+    match result {
+        Ok(result) => {
+            let msg = match result {
+                mavlink::ardupilotmega::MavMessage::common(msg) => {
+                    parse_query(&data::MAVLinkMessage {
+                        header: mavlink::MavHeader::default(),
+                        message: msg,
+                    })
+                }
+                msg => parse_query(&data::MAVLinkMessage {
+                    header: mavlink::MavHeader::default(),
+                    message: msg,
+                }),
+            };
+            ok_response(msg).await
+        }
+        Err(content) => not_found_response(parse_query(&content)).await,
+    }
 }
 
 #[api_v2_operation]
@@ -213,16 +280,6 @@ pub async fn mavlink_post(
         "Failed to parse message, not a valid MAVLinkMessage.",
     ))
     .await
-}
-
-#[api_v2_operation]
-/// Drone Mission
-pub async fn mission_post(mission: web::Json<Mission>) -> actix_web::Result<HttpResponse> {
-    println!("Received mission id: {}", mission.id);
-    for item in &mission.items {
-        println!("Mission Item: {}, {}, {}", item.lat, item.lon, item.alt);
-    } 
-    ok_response("Ok".to_string()).await
 }
 
 #[api_v2_operation]

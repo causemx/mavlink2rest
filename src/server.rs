@@ -26,7 +26,10 @@ fn add_v1_paths(scope: Scope) -> Scope {
         .route("/helper/mavlink", web::get().to(endpoints::helper_mavlink))
         .route("/mavlink", web::get().to(endpoints::mavlink))
         .route("/mavlink", web::post().to(endpoints::mavlink_post))
-        .route("/mission", web::post().to(endpoints::mission_post))
+        // For webgcs info dumpping
+        .route("/mavlink/voltage", web::get().to(endpoints::get_voltage))
+        .route("/mavlink/gps", web::get().to(endpoints::get_gps))
+        .route("/mavlink/speed", web::get().to(endpoints::get_speed))
         .route(r"/mavlink/{path:.*}", web::get().to(endpoints::mavlink))
         .service(web::resource("/ws/mavlink").route(web::get().to(endpoints::websocket)))
 }
