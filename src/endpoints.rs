@@ -97,7 +97,7 @@ pub async fn info() -> Json<Info> {
 }
 
 #[api_v2_operation]
-/// Return gps
+/// Provide information related to GPS(coordinate)
 pub async fn get_gps(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
     let result = match mavlink::ardupilotmega::MavMessage::message_id_from_name("GPS_RAW_INT") {
         Ok(id) => mavlink::Message::default_message_from_id(id),
@@ -124,7 +124,7 @@ pub async fn get_gps(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
 }
 
 #[api_v2_operation]
-/// Return speed
+/// Provide information related to SPEED
 pub async fn get_speed(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
     let result = match mavlink::ardupilotmega::MavMessage::message_id_from_name("VFR_HUD") {
         Ok(id) => mavlink::Message::default_message_from_id(id),
@@ -151,7 +151,7 @@ pub async fn get_speed(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
 }
 
 #[api_v2_operation]
-/// Return voltage
+/// Provided information related to BATTERY
 pub async fn get_voltage(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
     let result = match mavlink::ardupilotmega::MavMessage::message_id_from_name("SYS_STATUS") {
         Ok(id) => mavlink::Message::default_message_from_id(id),
