@@ -13,6 +13,7 @@ use actix_web::{
 use crate::cli;
 use log::*;
 
+
 fn json_error_handler(error: JsonPayloadError, _: &HttpRequest) -> actix_web::Error {
     warn!("Problem with json: {}", error.to_string());
     match error {
@@ -27,12 +28,10 @@ fn add_v1_paths(scope: Scope) -> Scope {
         .route("/mavlink", web::get().to(endpoints::mavlink))
         .route("/mavlink", web::post().to(endpoints::mavlink_post))
         // For webgcs info dumpping
-        .route("/mavlink/vehicles/1/components/1/messages/SYS_STATUS
-", web::get().to(endpoints::mavlink))
-        .route("mavlink/vehicles/1/components/1/messages/GPS_RAW_INT
-", web::get().to(endpoints::mavlink))
-        .route("mavlink/vehicles/1/components/1/messages/VHR_HUD", web::get().to(endpoints::mavlink))
-        .route("mavlink/vehicles/1/components/1/messages/ALTITUDE",web::get().to(endpoints::mavlink))
+        .route("/mavlink/battery", web::get().to(endpoints::get_voltage))
+        .route("/mavlink/gps", web::get().to(endpoints::get_gps))
+        .route("/mavlink/speed", web::get().to(endpoints::get_speed))
+        .route("/mavlink/altitude",web::get().to(endpoints::get_altitude))
         .route(r"/mavlink/{path:.*}", web::get().to(endpoints::mavlink))
         .service(web::resource("/ws/mavlink").route(web::get().to(endpoints::websocket)))
 }

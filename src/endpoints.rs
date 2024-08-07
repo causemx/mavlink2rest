@@ -97,84 +97,39 @@ pub async fn info() -> Json<Info> {
 }
 
 #[api_v2_operation]
-/// Provide information related to GPS(coordinate)
+/// Provide information related to GPS(coordinate),
+/// include: lat: latitude, lon: longitude
 pub async fn get_gps(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
-    let result = match mavlink::ardupilotmega::MavMessage::message_id_from_name("GPS_RAW_INT") {
-        Ok(id) => mavlink::Message::default_message_from_id(id),
-        Err(error) => Err(error),
-    };
-    match result {
-        Ok(result) => {
-            let msg = match result {
-                mavlink::ardupilotmega::MavMessage::common(msg) => {
-                    parse_query(&data::MAVLinkMessage {
-                        header: mavlink::MavHeader::default(),
-                        message: msg,
-                    })
-                }
-                msg => parse_query(&data::MAVLinkMessage {
-                    header: mavlink::MavHeader::default(),
-                    message: msg,
-                }),
-            };
-            ok_response(msg).await   
-        }
-        Err(content) => not_found_response(parse_query(&content)).await,
-    }
+   let path = "vehicles/1/components/1/messages/GPS_RAW_INT/message";
+   let message = data::messages().pointer(&path); 
+   ok_response(message).await
 }
 
 #[api_v2_operation]
-/// Provide information related to SPEED
+/// Provide information related to SPEED,
+/// include: airspeed, groundspeed
 pub async fn get_speed(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
-    let result = match mavlink::ardupilotmega::MavMessage::message_id_from_name("VFR_HUD") {
-        Ok(id) => mavlink::Message::default_message_from_id(id),
-        Err(error) => Err(error),
-    };
-    match result {
-        Ok(result) => {
-            let msg = match result {
-                mavlink::ardupilotmega::MavMessage::common(msg) => {
-                    parse_query(&data::MAVLinkMessage {
-                        header: mavlink::MavHeader::default(),
-                        message: msg,
-                    })
-                }
-                msg => parse_query(&data::MAVLinkMessage {
-                    header: mavlink::MavHeader::default(),
-                    message: msg,
-                }),
-            };
-            ok_response(msg).await
-        }
-        Err(content) => not_found_response(parse_query(&content)).await,
-    }
+    let path = "vehicles/1/components/1/messages/VFR_HUD/message";
+    let message = data::messages().pointer(&path); 
+    ok_response(message).await 
 }
 
 #[api_v2_operation]
-/// Provided information related to BATTERY
+/// Provided information related to BATTERY,
+/// include: voltage_battery, current_battery, battery_remain
 pub async fn get_voltage(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
-    let result = match mavlink::ardupilotmega::MavMessage::message_id_from_name("SYS_STATUS") {
-        Ok(id) => mavlink::Message::default_message_from_id(id),
-        Err(error) => Err(error),
-    };
-    match result {
-        Ok(result) => {
-            let msg = match result {
-                mavlink::ardupilotmega::MavMessage::common(msg) => {
-                    parse_query(&data::MAVLinkMessage {
-                        header: mavlink::MavHeader::default(),
-                        message: msg,
-                    })
-                }
-                msg => parse_query(&data::MAVLinkMessage {
-                    header: mavlink::MavHeader::default(),
-                    message: msg,
-                }),
-            };
-            ok_response(msg).await
-        }
-        Err(content) => not_found_response(parse_query(&content)).await,
-    }
+    let path = "vehicles/1/components/1/messages/SYS_STATUS/message";
+    let message = data::messages().pointer(&path); 
+    ok_response(message).await 
+}
+
+#[api_v2_operation]
+/// Provided information related to ATTITUDE,
+/// include: roll, pitch, yaw 
+pub async fn get_altitude(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
+    let path = "vehicles/1/components/1/messages/ATTITUDE/message";
+    let message = data::messages().pointer(&path); 
+    ok_response(message).await 
 }
 
 #[api_v2_operation]
