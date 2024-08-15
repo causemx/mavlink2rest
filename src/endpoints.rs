@@ -13,7 +13,7 @@ use super::mavlink_vehicle::MAVLinkVehicleArcMutex;
 use super::websocket_manager::WebsocketActor;
 
 use log::*;
-use mavlink::Message;
+use mavlink::{MavHeader, Message};
 
 static HTML_DIST: Dir<'_> = include_dir!("src/html");
 
@@ -48,6 +48,25 @@ pub struct WebsocketQuery {
 pub struct MAVLinkHelperQuery {
     /// MAVLink message name, possible options are here: https://docs.rs/mavlink/0.10.0/mavlink/#modules
     name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Waypoint {
+    target_system: u8,
+    target_component: u8,
+    seq: u16,
+    frame: u8,
+    command: u16,
+    current: u8,
+    autocontinue: u8,
+    param1: f32,
+    param2: f32,
+    param3: f32,
+    param4: f32,
+    x: f64,
+    y: f64,
+    z: f32,
+    mission_type: u8,
 }
 
 fn load_html_file(filename: &str) -> Option<String> {
@@ -177,6 +196,40 @@ pub async fn helper_mavlink(
             ok_response(msg).await
         }
         Err(content) => not_found_response(parse_query(&content)).await,
+    }
+}
+
+#[api_v2_operation]
+#[allow(clippy::await_holding_lock)]
+pub async fn mission_post(
+    data: web::Data<MAVLinkVehicleArcMutex>,
+    _req: HttpRequest,
+    bytes: web::Bytes,
+) -> actix_web::Result<HttpResponse> {
+    let json_string = String::from_utf8(bytes.to_vec()).expect("Failed to parse by UTF8");
+    debug!("received: {json_string}");
+
+    let waypoints: Vec<Waypoint> = serde_json::from_str(&json_string)?;
+    let mission_count = waypoints.len();
+    let mission_count_msg =
+        mavlink::ardupilotmega::MavMessage::common(mavlink::common::MavMessage::MISSION_COUNT(mavlink::common::MISSION_COUNT_DATA {
+            count: mission_count as u16,
+            target_component: 1,
+            target_system: 1,
+            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+        }));
+    match data
+        .lock()
+        .unwrap()
+        .send(&MavHeader::default(), &mission_count_msg)
+    {
+        Ok(_result) => {
+            // data::update((content.header, content_ardupilotmega));
+            return HttpResponse::Ok().await;
+        }
+        Err(err) => {
+            return not_found_response(format!("Failed to send message: {err:?}")).await;
+        }
     }
 }
 

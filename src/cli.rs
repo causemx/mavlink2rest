@@ -100,7 +100,7 @@ fn get_clap_matches<'a>() -> clap::ArgMatches<'a> {
                 .value_name("TYPE:<IP/SERIAL>:<PORT/BAUDRATE>")
                 .help("Sets the mavlink connection string")
                 .takes_value(true)
-                .default_value("udpin:0.0.0.0:14551"),
+                .default_value("udpin:127.0.0.1:14550"),
         )
         .arg(
             clap::Arg::with_name("server")
