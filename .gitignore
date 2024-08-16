@@ -2,4 +2,8 @@
 **/*.rs.bk
 /src/html
 Cargo.lock
+<<<<<<< HEAD
 .vscode/
+=======
+*.json
+>>>>>>> ff592cb (Add step to build binary)
