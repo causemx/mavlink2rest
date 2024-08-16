@@ -211,26 +211,49 @@ pub async fn mission_post(
 
     let waypoints: Vec<Waypoint> = serde_json::from_str(&json_string)?;
     let mission_count = waypoints.len();
-    let mission_count_msg =
-        mavlink::ardupilotmega::MavMessage::common(mavlink::common::MavMessage::MISSION_COUNT(mavlink::common::MISSION_COUNT_DATA {
+    let mission_count_msg = mavlink::ardupilotmega::MavMessage::common(
+        mavlink::common::MavMessage::MISSION_COUNT(mavlink::common::MISSION_COUNT_DATA {
             count: mission_count as u16,
             target_component: 1,
             target_system: 1,
             mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
-        }));
-    match data
-        .lock()
+        }),
+    );
+    data.lock()
         .unwrap()
         .send(&MavHeader::default(), &mission_count_msg)
-    {
-        Ok(_result) => {
-            // data::update((content.header, content_ardupilotmega));
-            return HttpResponse::Ok().await;
-        }
-        Err(err) => {
-            return not_found_response(format!("Failed to send message: {err:?}")).await;
-        }
-    }
+        .expect("Failed to send count");
+
+    waypoints.iter().for_each(|waypoint| {
+        let mission_item_int_data = mavlink::common::MISSION_ITEM_INT_DATA {
+            seq: waypoint.seq as u16,
+            param1: waypoint.param1 as f32,
+            param2: waypoint.param2 as f32,
+            param3: waypoint.param3 as f32,
+            param4: waypoint.param4 as f32,
+            x: waypoint.x as i32,
+            y: waypoint.y as i32,
+            z: waypoint.z as f32,
+            frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+            command: mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
+            target_component: 1,
+            target_system: 1,
+            current: 0,
+            autocontinue: 1,
+            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+        };
+        data.lock()
+            .unwrap()
+            .send(
+                &MavHeader::default(),
+                &mavlink::ardupilotmega::MavMessage::common(
+                    mavlink::common::MavMessage::MISSION_ITEM_INT(mission_item_int_data),
+                ),
+            )
+            .expect("Failed to send mission item");
+    });
+
+    ok_response("ok".to_string()).await
 }
 
 #[api_v2_operation]
