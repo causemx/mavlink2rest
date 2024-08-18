@@ -115,6 +115,7 @@ fn receive_message_loop<
     loop {
         match vehicle.recv() {
             Ok((header, msg)) => {
+                println!("id:{}, name:{}, msg: {:?}", msg.message_id(), msg.message_name(), msg);
                 if let Err(error) = channel.send((header, msg)) {
                     error!("Failed to send message though channel: {:#?}", error);
                 }
