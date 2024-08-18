@@ -13,7 +13,7 @@ use super::mavlink_vehicle::MAVLinkVehicleArcMutex;
 use super::websocket_manager::WebsocketActor;
 
 use log::*;
-use mavlink::{MavHeader, Message};
+use mavlink::Message;
 
 static HTML_DIST: Dir<'_> = include_dir!("src/html");
 
@@ -50,7 +50,7 @@ pub struct MAVLinkHelperQuery {
     name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Waypoint {
     target_system: u8,
     target_component: u8,
@@ -63,8 +63,8 @@ struct Waypoint {
     param2: f32,
     param3: f32,
     param4: f32,
-    x: f64,
-    y: f64,
+    x: i32,
+    y: i32,
     z: f32,
     mission_type: u8,
 }
@@ -207,8 +207,9 @@ pub async fn mission_post(
     bytes: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
     let json_string = String::from_utf8(bytes.to_vec()).expect("Failed to parse by UTF8");
+    // debug!("received: {json_string}");
     debug!("received: {json_string}");
-
+     
     let waypoints: Vec<Waypoint> = serde_json::from_str(&json_string)?;
     let mission_count = waypoints.len();
     let mission_count_msg = mavlink::ardupilotmega::MavMessage::common(
@@ -219,21 +220,26 @@ pub async fn mission_post(
             mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
         }),
     );
-    data.lock()
-        .unwrap()
-        .send(&MavHeader::default(), &mission_count_msg)
-        .expect("Failed to send count");
-
+     
+    match data.lock().unwrap().send(&mavlink::MavHeader::default(), &mission_count_msg) {
+        Ok(result) => {
+           println!("send_count_result: {}", result); 
+        }
+        Err(err) => {
+            error!("Error: {}", err);
+        } 
+    }
+    
     waypoints.iter().for_each(|waypoint| {
         let mission_item_int_data = mavlink::common::MISSION_ITEM_INT_DATA {
-            seq: waypoint.seq as u16,
-            param1: waypoint.param1 as f32,
-            param2: waypoint.param2 as f32,
-            param3: waypoint.param3 as f32,
-            param4: waypoint.param4 as f32,
-            x: waypoint.x as i32,
-            y: waypoint.y as i32,
-            z: waypoint.z as f32,
+            seq: waypoint.seq,
+            param1: waypoint.param1,
+            param2: waypoint.param2,
+            param3: waypoint.param3,
+            param4: waypoint.param4,
+            x: waypoint.x,
+            y: waypoint.y,
+            z: waypoint.z,
             frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
             command: mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
             target_component: 1,
@@ -242,18 +248,21 @@ pub async fn mission_post(
             autocontinue: 1,
             mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
         };
-        data.lock()
-            .unwrap()
-            .send(
-                &MavHeader::default(),
-                &mavlink::ardupilotmega::MavMessage::common(
-                    mavlink::common::MavMessage::MISSION_ITEM_INT(mission_item_int_data),
-                ),
-            )
-            .expect("Failed to send mission item");
+        let waypoint = waypoint.clone();
+        let mission_item_int_encode = mavlink::ardupilotmega::MavMessage::common(
+            mavlink::common::MavMessage::MISSION_ITEM_INT(mission_item_int_data));
+
+        match data.lock().unwrap().send(&mavlink::MavHeader::default(),&mission_item_int_encode) {
+            Ok(result) => {
+                println!("send_mission_item: {}, seq: {}", result, waypoint.seq); 
+             }
+             Err(err) => {
+                 error!("Error: {}", err);
+             } 
+        }
     });
 
-    ok_response("ok".to_string()).await
+    ok_response("save mission completed.".to_string()).await
 }
 
 #[api_v2_operation]
