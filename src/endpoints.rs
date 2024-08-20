@@ -8,12 +8,14 @@ use include_dir::{include_dir, Dir};
 use paperclip::actix::{api_v2_operation, Apiv2Schema};
 use serde::{Deserialize, Serialize};
 
+use crate::mavlink_vehicle;
+
 use super::data;
 use super::mavlink_vehicle::MAVLinkVehicleArcMutex;
 use super::websocket_manager::WebsocketActor;
 
 use log::*;
-use mavlink::Message;
+use mavlink::{MavHeader, Message};
 
 static HTML_DIST: Dir<'_> = include_dir!("src/html");
 
@@ -201,25 +203,19 @@ pub async fn helper_mavlink(
 
 #[api_v2_operation]
 pub async fn mission_get(data: web::Data<MAVLinkVehicleArcMutex>, _req: HttpRequest) -> actix_web::Result<HttpResponse>{
-    let mission_request_list_data = mavlink::common::MISSION_REQUEST_INT_DATA {
-        seq: 0,
+    let mission_request_list_data = mavlink::common::MISSION_REQUEST_LIST_DATA {
         target_component: 1,
         target_system: 1,
         mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
     };
-    
-    let mission_request_int = mavlink::ardupilotmega::MavMessage::common(
-        mavlink::common::MavMessage::MISSION_REQUEST_INT(mission_request_list_data));
 
-    match data.lock().unwrap().send(&mavlink::MavHeader::default(), &mission_request_int) {
-        Ok(_result) => {
-            // data::update((content.header, content.message));
-            return ok_response("Mission request sended".to_string()).await
-        }
-        Err(err) => {
-            return not_found_response(format!("Failed to send message: {err:?}")).await
-        }
-    }
+    let mission_request_int = mavlink::ardupilotmega::MavMessage::common(
+        mavlink::common::MavMessage::MISSION_REQUEST_LIST(mission_request_list_data));
+
+    data.lock().unwrap().send(&mavlink::MavHeader::default(), &mission_request_int)?;
+
+    ok_response("Mission request sended.".to_string()).await
+
 }
 
 #[api_v2_operation]

@@ -1,6 +1,7 @@
 use std::sync::{mpsc, Arc, Mutex};
 
 use log::*;
+use mavlink::Message;
 
 pub type MAVLinkVehicleArcMutex = Arc<Mutex<MAVLinkVehicle<mavlink::ardupilotmega::MavMessage>>>;
 
@@ -19,6 +20,15 @@ impl<M: mavlink::Message> MAVLinkVehicle<M> {
         match result {
             Err(mavlink::error::MessageWriteError::Io(error)) => Err(error),
             Ok(something) => Ok(something),
+        }
+    }
+
+    pub fn recv(&self) -> Result<(mavlink::MavHeader, M), std::io::Error> {
+        let result = self.vehicle.recv();
+        match result {
+            Ok(message) => Ok(message),
+            Err(mavlink::error::MessageReadError::Io(error)) => Err(error),
+            Err(mavlink::error::MessageReadError::Parse(_)) => todo!(),
         }
     }
 }
@@ -115,7 +125,13 @@ fn receive_message_loop<
     loop {
         match vehicle.recv() {
             Ok((header, msg)) => {
-                println!("id:{}, name:{}, msg: {:?}", msg.message_id(), msg.message_name(), msg);
+                // println!("id:{}, name:{}, msg: {:?}", msg.message_id(), msg.message_name(), msg);
+                match msg.message_id() {
+                    73 => println!("Got MISSION_ITEM_INT"),
+                    44 => println!("Got MISSION_COUNT"),
+                    _ => {}
+                }
+
                 if let Err(error) = channel.send((header, msg)) {
                     error!("Failed to send message though channel: {:#?}", error);
                 }
