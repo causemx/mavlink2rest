@@ -1,4 +1,3 @@
-use std::path::Path;
 use actix_web::{
     web::{self, Json},
     HttpRequest, HttpResponse,
@@ -7,13 +6,14 @@ use actix_web_actors::ws;
 use include_dir::{include_dir, Dir};
 use paperclip::actix::{api_v2_operation, Apiv2Schema};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use super::data;
-use super::mavlink_vehicle::MAVLinkVehicleArcMutex;
+use super::mavlink_vehicle::{MAVLinkVehicleArcMutex, MissionMessage};
 use super::websocket_manager::WebsocketActor;
 
 use log::*;
-use mavlink::Message;
+use mavlink::{common::MISSION_COUNT_DATA, Message};
 
 static HTML_DIST: Dir<'_> = include_dir!("src/html");
 
@@ -119,9 +119,9 @@ pub async fn info() -> Json<Info> {
 /// Provide information related to GPS(coordinate),
 /// include: lat: latitude, lon: longitude
 pub async fn get_gps(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
-   let path = "vehicles/1/components/1/messages/GPS_RAW_INT/message";
-   let message = data::messages().pointer(&path); 
-   ok_response(message).await
+    let path = "vehicles/1/components/1/messages/GPS_RAW_INT/message";
+    let message = data::messages().pointer(&path);
+    ok_response(message).await
 }
 
 #[api_v2_operation]
@@ -129,8 +129,8 @@ pub async fn get_gps(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
 /// include: airspeed, groundspeed
 pub async fn get_speed(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
     let path = "vehicles/1/components/1/messages/VFR_HUD/message";
-    let message = data::messages().pointer(&path); 
-    ok_response(message).await 
+    let message = data::messages().pointer(&path);
+    ok_response(message).await
 }
 
 #[api_v2_operation]
@@ -138,17 +138,17 @@ pub async fn get_speed(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
 /// include: voltage_battery, current_battery, battery_remain
 pub async fn get_voltage(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
     let path = "vehicles/1/components/1/messages/SYS_STATUS/message";
-    let message = data::messages().pointer(&path); 
-    ok_response(message).await 
+    let message = data::messages().pointer(&path);
+    ok_response(message).await
 }
 
 #[api_v2_operation]
 /// Provided information related to ATTITUDE,
-/// include: roll, pitch, yaw 
+/// include: roll, pitch, yaw
 pub async fn get_altitude(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
     let path = "vehicles/1/components/1/messages/ATTITUDE/message";
-    let message = data::messages().pointer(&path); 
-    ok_response(message).await 
+    let message = data::messages().pointer(&path);
+    ok_response(message).await
 }
 
 #[api_v2_operation]
@@ -200,22 +200,71 @@ pub async fn helper_mavlink(
 }
 
 #[api_v2_operation]
-pub async fn mission_get(data: web::Data<MAVLinkVehicleArcMutex>, _req: HttpRequest) -> actix_web::Result<HttpResponse>{
-    let mission_request_list_data = mavlink::common::MISSION_REQUEST_INT_DATA {
-        seq: 0,
+pub async fn mission_get(
+    data: web::Data<MAVLinkVehicleArcMutex>,
+    _req: HttpRequest,
+) -> actix_web::Result<HttpResponse> {
+    let mission_request_list_data = mavlink::common::MISSION_REQUEST_LIST_DATA {
         target_component: 1,
         target_system: 1,
         mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
     };
 
-    let mission_request_int = mavlink::ardupilotmega::MavMessage::common(
-        mavlink::common::MavMessage::MISSION_REQUEST_INT(mission_request_list_data));
+    let mission_request_list = mavlink::ardupilotmega::MavMessage::common(
+        mavlink::common::MavMessage::MISSION_REQUEST_LIST(mission_request_list_data),
+    );
 
-    let mavlink_vehicle = data.lock().unwrap();
-    mavlink_vehicle.send(&mavlink::MavHeader::default(), &mission_request_int)?;
+    {
+        let mavlink_vehicle = data.lock().unwrap();
+        mavlink_vehicle.send(&mavlink::MavHeader::default(), &mission_request_list)?;
+    }
 
-    ok_response("Mission request sended.".to_string()).await
+    let mission_rx = {
+        let mavlink_vehicle = data.lock().unwrap();
+        mavlink_vehicle.mission_rx_channel.clone()
+    };
 
+    let mut mission_items: Vec<mavlink::common::MISSION_ITEM_INT_DATA> = Vec::new();
+
+    // Wait for mission count
+    let mission_rx = mission_rx.lock().unwrap();
+    let mission_count = match mission_rx.recv() {
+        Ok(MissionMessage::Count(count)) => count,
+        _ => return not_found_response("Failed to receive mission count".to_string()).await,
+    };
+
+    // Collect mission items
+    for i in 0..mission_count {
+        let mission_request_int_data = mavlink::common::MISSION_REQUEST_INT_DATA {
+            seq: i,
+            target_component: 1,
+            target_system: 1,
+            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+        };
+
+        let mission_request_int = mavlink::ardupilotmega::MavMessage::common(
+            mavlink::common::MavMessage::MISSION_REQUEST_INT(mission_request_int_data),
+        );
+
+        data.lock()
+            .unwrap()
+            .send(&mavlink::MavHeader::default(), &mission_request_int)?;
+        match mission_rx.recv() {
+            Ok(MissionMessage::Item(item)) => {
+                mission_items.push(item);
+            }
+            _ => {
+                return not_found_response("Failed to receive all mission items".to_string()).await
+            }
+        }
+    }
+
+    let mission_data = serde_json::json!({
+        "count": mission_count,
+        "items": mission_items,
+    });
+
+    ok_response(serde_json::to_string(&mission_data)?).await
 }
 
 #[api_v2_operation]
@@ -226,62 +275,13 @@ pub async fn mission_post(
     bytes: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
     let json_string = String::from_utf8(bytes.to_vec()).expect("Failed to parse by UTF8");
-    // debug!("received: {json_string}");
-    debug!("received: {json_string}");
-     
     let waypoints: Vec<Waypoint> = serde_json::from_str(&json_string)?;
-    let mission_count = waypoints.len();
-    let mission_count_msg = mavlink::ardupilotmega::MavMessage::common(
-        mavlink::common::MavMessage::MISSION_COUNT(mavlink::common::MISSION_COUNT_DATA {
-            count: mission_count as u16,
-            target_component: 1,
-            target_system: 1,
-            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
-        }),
-    );
-     
-    match data.lock().unwrap().send(&mavlink::MavHeader::default(), &mission_count_msg) {
-        Ok(result) => {
-           println!("send_count_result: {}", result); 
-        }
-        Err(err) => {
-            error!("Error: {}", err);
-        } 
-    }
-    
-    waypoints.iter().for_each(|waypoint| {
-        let mission_item_int_data = mavlink::common::MISSION_ITEM_INT_DATA {
-            seq: waypoint.seq,
-            param1: waypoint.param1,
-            param2: waypoint.param2,
-            param3: waypoint.param3,
-            param4: waypoint.param4,
-            x: waypoint.x,
-            y: waypoint.y,
-            z: waypoint.z,
-            frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-            command: mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
-            target_component: 1,
-            target_system: 1,
-            current: 0,
-            autocontinue: 1,
-            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
-        };
-        let waypoint = waypoint.clone();
-        let mission_item_int_encode = mavlink::ardupilotmega::MavMessage::common(
-            mavlink::common::MavMessage::MISSION_ITEM_INT(mission_item_int_data));
+    debug!("Received waypoints: {:?}", waypoints);
 
-        match data.lock().unwrap().send(&mavlink::MavHeader::default(),&mission_item_int_encode) {
-            Ok(result) => {
-                println!("send_mission_item: {}, seq: {}", result, waypoint.seq); 
-             }
-             Err(err) => {
-                 error!("Error: {}", err);
-             } 
-        }
-    });
+    let mavlink_vehicle = data.lock().unwrap();
 
-    ok_response("save mission completed.".to_string()).await
+    //TODO!
+    ok_response(serde_json::to_string("done")?).await
 }
 
 #[api_v2_operation]

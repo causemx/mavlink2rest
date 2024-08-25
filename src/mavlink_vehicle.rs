@@ -5,10 +5,12 @@ use mavlink::Message;
 
 pub type MAVLinkVehicleArcMutex = Arc<Mutex<MAVLinkVehicle<mavlink::ardupilotmega::MavMessage>>>;
 
-#[allow(dead_code)]
+#[derive(Debug)]
 pub enum MissionMessage {
     Count(u16),
     Item(mavlink::common::MISSION_ITEM_INT_DATA),
+    Request(u16),
+    Ack(mavlink::common::MavMissionResult),
 }
 
 #[derive(Clone)]
@@ -16,6 +18,7 @@ pub struct MAVLinkVehicle<M: mavlink::Message> {
     //TODO: Check if Arc<Box can be only Arc or Box
     vehicle: Arc<Box<dyn mavlink::MavConnection<M> + Sync + Send>>,
     header: Arc<Mutex<mavlink::MavHeader>>,
+    pub mission_rx_channel: Arc<Mutex<mpsc::Receiver<MissionMessage>>>,
 }
 
 impl<M: mavlink::Message> MAVLinkVehicle<M> {
@@ -38,7 +41,6 @@ pub struct MAVLinkVehicleHandle<M: mavlink::Message> {
     receive_message_thread: std::thread::JoinHandle<()>,
     //TODO: Add a channel for errors
     pub thread_rx_channel: std::sync::mpsc::Receiver<(mavlink::MavHeader, M)>,
-    pub mission_rx_channel: std::sync::mpsc::Receiver<MissionMessage>,
 }
 
 impl<M: mavlink::Message> MAVLinkVehicle<M> {
@@ -56,9 +58,12 @@ impl<M: mavlink::Message> MAVLinkVehicle<M> {
             sequence: 0,
         };
 
+        let (_mission_tx, mission_rx) = mpsc::channel();
+
         Self {
             vehicle: Arc::new(vehicle),
             header: Arc::new(Mutex::new(header)),
+            mission_rx_channel: Arc::new(Mutex::new(mission_rx)),
         }
     }
 }
@@ -97,7 +102,6 @@ impl<
         let receive_message_mavlink_vehicle = mavlink_vehicle.clone();
 
         let (tx_channel, rx_channel) = mpsc::channel::<(mavlink::MavHeader, M)>();
-        let (mission_tx_channel, mission_rx_channel) = mpsc::channel::<MissionMessage>();
         Self {
             mavlink_vehicle,
             heartbeat_thread: std::thread::spawn(move || heartbeat_loop(heartbeat_mavlink_vehicle)),
@@ -105,11 +109,9 @@ impl<
                 receive_message_loop(
                     receive_message_mavlink_vehicle,
                     tx_channel,
-                    mission_tx_channel,
                 );
             }),
             thread_rx_channel: rx_channel,
-            mission_rx_channel: mission_rx_channel,
         }
     }
 }
@@ -119,13 +121,25 @@ fn receive_message_loop<
 >(
     mavlink_vehicle: Arc<Mutex<MAVLinkVehicle<M>>>,
     channel: std::sync::mpsc::Sender<(mavlink::MavHeader, M)>,
-    mission_channel: std::sync::mpsc::Sender<MissionMessage>,
 ) {
-    let mavlink_vehicle = mavlink_vehicle.as_ref().lock().unwrap();
+    // let mavlink_vehicle = mavlink_vehicle.as_ref().lock().unwrap();
+    // let vehicle = mavlink_vehicle.vehicle.clone();
+    // drop(mavlink_vehicle);
+    // let vehicle = vehicle.as_ref();
 
-    let vehicle = mavlink_vehicle.vehicle.clone();
-    drop(mavlink_vehicle);
-    let vehicle = vehicle.as_ref();
+    let vehicle = {
+        let mavlink_vehicle = mavlink_vehicle.lock().unwrap();
+        mavlink_vehicle.vehicle.clone()
+    };
+    
+    let mission_tx = {
+        let mavlink_vehicle = mavlink_vehicle.lock().unwrap();
+        let mission_rx = mavlink_vehicle.mission_rx_channel.clone();
+        let (tx, rx) = mpsc::channel();
+        *mission_rx.lock().unwrap() = rx;
+        tx
+    };
+
     loop {
         match vehicle.recv() {
             Ok((header, msg)) => {
@@ -146,21 +160,33 @@ fn receive_message_loop<
                             mavlink::ardupilotmega::MavMessage::common(
                                 mavlink::common::MavMessage::MISSION_COUNT(count_data),
                             ) => {
-                                println!("Got mission_count");
-                                if let Err(error) =
-                                    mission_channel.send(MissionMessage::Count(count_data.count))
-                                {
+                                println!("Got mission_count, count: {}", count_data.count);
+                                if let Err(error) = mission_tx.send(MissionMessage::Count(count_data.count)) {
                                     error!("Failed to send mission count: {:#?}", error);
                                 }
                             }
                             mavlink::ardupilotmega::MavMessage::common(
                                 mavlink::common::MavMessage::MISSION_ITEM_INT(item_data),
                             ) => {
-                                println!("Got mission_item_int");
-                                if let Err(error) =
-                                    mission_channel.send(MissionMessage::Item(item_data))
-                                {
+                                println!("Got mission_item_int, content: {:?}", item_data);
+                                if let Err(error) = mission_tx.send(MissionMessage::Item(item_data)) {
                                     error!("Failed to send mission item: {:#?}", error);
+                                }
+                            }
+                            mavlink::ardupilotmega::MavMessage::common(
+                                mavlink::common::MavMessage::MISSION_REQUEST(request_data),
+                            ) => {
+                                println!("Got mission_request, seq: {}", request_data.seq);
+                                if let Err(error) = mission_tx.send(MissionMessage::Request(request_data.seq)) {
+                                    error!("Failed to send mission request: {:#?}", error);
+                                }
+                            }
+                            mavlink::ardupilotmega::MavMessage::common(
+                                mavlink::common::MavMessage::MISSION_ACK(ack_data),
+                            ) => {
+                                println!("Got mission_ack, type: {:?}", ack_data.mavtype);
+                                if let Err(error) = mission_tx.send(MissionMessage::Ack(ack_data.mavtype)) {
+                                    error!("Failed to send mission ack: {:#?}", error);
                                 }
                             }
                             _ => {
