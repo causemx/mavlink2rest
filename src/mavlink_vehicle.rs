@@ -156,7 +156,7 @@ fn receive_message_loop<
                 // Then, handle the Result and match on the message type
                 match message_result {
                     Ok(parsed_message) => {
-                        match mavlink::ardupilotmega::MavMessage::common(parsed_message) {
+                        match mavlink::ardupilotmega::MavMessage::common(parsed_message.clone()) {
                             mavlink::ardupilotmega::MavMessage::common(
                                 mavlink::common::MavMessage::MISSION_COUNT(count_data),
                             ) => {
@@ -174,9 +174,9 @@ fn receive_message_loop<
                                 }
                             }
                             mavlink::ardupilotmega::MavMessage::common(
-                                mavlink::common::MavMessage::MISSION_REQUEST(request_data),
+                                mavlink::common::MavMessage::MISSION_REQUEST_INT(request_data),
                             ) => {
-                                println!("Got mission_request, seq: {}", request_data.seq);
+                                println!("Got mission_request_int, seq: {}", request_data.seq);
                                 if let Err(error) = mission_tx.send(MissionMessage::Request(request_data.seq)) {
                                     error!("Failed to send mission request: {:#?}", error);
                                 }
@@ -190,7 +190,7 @@ fn receive_message_loop<
                                 }
                             }
                             _ => {
-                                // println!("Received unhandled message type");
+                                // println!("Received unhandled message, msg:{}", parsed_message.message_name());
                             }
                         }
                     }

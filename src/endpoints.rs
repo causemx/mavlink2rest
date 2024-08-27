@@ -13,7 +13,10 @@ use super::mavlink_vehicle::{MAVLinkVehicleArcMutex, MissionMessage};
 use super::websocket_manager::WebsocketActor;
 
 use log::*;
-use mavlink::{common::MISSION_COUNT_DATA, Message};
+use mavlink::Message;
+use std::time::Duration;
+
+const TIMEOUT: Duration = Duration::from_secs(5);
 
 static HTML_DIST: Dir<'_> = include_dir!("src/html");
 
@@ -268,7 +271,6 @@ pub async fn mission_get(
 }
 
 #[api_v2_operation]
-#[allow(clippy::await_holding_lock)]
 pub async fn mission_post(
     data: web::Data<MAVLinkVehicleArcMutex>,
     _req: HttpRequest,
@@ -276,12 +278,140 @@ pub async fn mission_post(
 ) -> actix_web::Result<HttpResponse> {
     let json_string = String::from_utf8(bytes.to_vec()).expect("Failed to parse by UTF8");
     let waypoints: Vec<Waypoint> = serde_json::from_str(&json_string)?;
-    debug!("Received waypoints: {:?}", waypoints);
+    info!("Received {} waypoints", waypoints.len());
 
     let mavlink_vehicle = data.lock().unwrap();
+    let mission_rx = mavlink_vehicle.mission_rx_channel.clone();
 
-    //TODO!
-    ok_response(serde_json::to_string("done")?).await
+    // Clear existing mission
+    let mission_clear_all = mavlink::ardupilotmega::MavMessage::common(
+        mavlink::common::MavMessage::MISSION_CLEAR_ALL(mavlink::common::MISSION_CLEAR_ALL_DATA {
+            target_system: 1,
+            target_component: 1,
+            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+        }),
+    );
+    mavlink_vehicle.send(&mavlink::MavHeader::default(), &mission_clear_all)?;
+    info!("Sent MISSION_CLEAR_ALL");
+
+    // sleep(Duration::from_secs(1)).await;
+
+    // Send mission count
+    let mission_count = mavlink::ardupilotmega::MavMessage::common(
+        mavlink::common::MavMessage::MISSION_COUNT(mavlink::common::MISSION_COUNT_DATA {
+            count: waypoints.len() as u16,
+            target_system: 1,
+            target_component: 1,
+            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+        }),
+    );
+    mavlink_vehicle.send(&mavlink::MavHeader::default(), &mission_count)?;
+    info!("Sent MISSION_COUNT: {}", waypoints.len());
+
+    // Upload waypoints
+    let mission_rx = mission_rx.lock().unwrap();
+    for (i, waypoint) in waypoints.iter().enumerate() {
+        // Wait for mission request or other messages
+        match mission_rx.recv_timeout(TIMEOUT) {
+            Ok(MissionMessage::Request(seq)) => {
+                info!("Received request seq: {:?}", seq);
+                if seq as usize != i {
+                    error!(
+                        "Unexpected mission item request: expected {}, got {}",
+                        i, seq
+                    );
+                    return not_found_response(format!(
+                        "Unexpected mission item request: expected {}, got {}",
+                        i, seq
+                    ))
+                    .await;
+                }
+                info!("Received MISSION_REQUEST for item {}", seq);
+            }
+            Ok(MissionMessage::Ack(result)) => {
+                info!("Received unexpected MISSION_ACK: {:?}", result);
+                if result == mavlink::common::MavMissionResult::MAV_MISSION_ACCEPTED {
+                    return ok_response(
+                        "Mission upload completed early, but was accepted.".to_string(),
+                    )
+                    .await;
+                } else {
+                    return not_found_response(format!(
+                        "Unexpected MISSION_ACK received: {:?}",
+                        result
+                    ))
+                    .await;
+                }
+            }
+            Ok(other) => {
+                error!(
+                    "Unexpected message while waiting for MISSION_REQUEST: {:?}",
+                    other
+                );
+                return not_found_response(format!(
+                    "Unexpected message while waiting for MISSION_REQUEST: {:?}",
+                    other
+                ))
+                .await;
+            }
+            Err(_) => {
+                error!("Timeout waiting for MISSION_REQUEST");
+                return not_found_response("Timeout waiting for MISSION_REQUEST".to_string()).await;
+            }
+        }
+
+        // Send mission item
+        let mission_item = mavlink::ardupilotmega::MavMessage::common(
+            mavlink::common::MavMessage::MISSION_ITEM_INT(mavlink::common::MISSION_ITEM_INT_DATA {
+                param1: waypoint.param1,
+                param2: waypoint.param2,
+                param3: waypoint.param3,
+                param4: waypoint.param4,
+                x: waypoint.x,
+                y: waypoint.y,
+                z: waypoint.z,
+                seq: i as u16,
+                command: mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
+                target_system: waypoint.target_system,
+                target_component: waypoint.target_component,
+                frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                current: waypoint.current,
+                autocontinue: waypoint.autocontinue,
+                mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+            }),
+        );
+        mavlink_vehicle.send(&mavlink::MavHeader::default(), &mission_item)?;
+        info!("Sent MISSION_ITEM_INT for item {}", i);
+    }
+
+    // Wait for final mission acknowledgement
+    match mission_rx.recv_timeout(TIMEOUT) {
+        Ok(MissionMessage::Ack(result)) => {
+            info!("Received final MISSION_ACK: {:?}", result);
+            if result == mavlink::common::MavMissionResult::MAV_MISSION_ACCEPTED {
+                ok_response("Mission upload completed successfully.".to_string()).await
+            } else {
+                not_found_response(format!("Mission upload failed: {:?}", result)).await
+            }
+        }
+        Ok(other) => {
+            error!(
+                "Unexpected message while waiting for final MISSION_ACK: {:?}",
+                other
+            );
+            not_found_response(format!(
+                "Unexpected message while waiting for MISSION_ACK: {:?}",
+                other
+            ))
+            .await
+        }
+        Err(_) => {
+            error!("Timeout waiting for final MISSION_ACK");
+            not_found_response("Timeout waiting for MISSION_ACK".to_string()).await
+        }
+    }
+
+    //ok_response("mission uploaded".to_string()).await
 }
 
 #[api_v2_operation]
