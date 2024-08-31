@@ -174,9 +174,9 @@ fn receive_message_loop<
                                 }
                             }
                             mavlink::ardupilotmega::MavMessage::common(
-                                mavlink::common::MavMessage::MISSION_REQUEST_INT(request_data),
+                                mavlink::common::MavMessage::MISSION_REQUEST(request_data),
                             ) => {
-                                println!("Got mission_request_int, seq: {}", request_data.seq);
+                                println!("Got mission_request, seq: {}", request_data.seq);
                                 if let Err(error) = mission_tx.send(MissionMessage::Request(request_data.seq)) {
                                     error!("Failed to send mission request: {:#?}", error);
                                 }

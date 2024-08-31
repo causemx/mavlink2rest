@@ -1,36 +1,22 @@
 [
   {
-    "target_system": 1,
-    "target_component": 1,
-    "seq": 0,
-    "frame": 3,
-    "command": 16,
-    "current": 1,
-    "autocontinue": 1,
-    "param1": 0,
-    "param2": 0,
-    "param3": 0,
-    "param4": 0,
-    "x": 473977419,
-    "y": 85455939,
-    "z": 500,
-    "mission_type": 0
+    "lat": -35.361297,
+    "lon": 149.161120,
+    "alt": 50.0
   },
   {
-    "target_system": 1,
-    "target_component": 1,
-    "seq": 1,
-    "frame": 3,
-    "command": 16,
-    "current": 0,
-    "autocontinue": 1,
-    "param1": 0,
-    "param2": 0,
-    "param3": 0,
-    "param4": 0,
-    "x": 473977419,
-    "y": 85456939,
-    "z": 600,
-    "mission_type": 0
+    "lat": -35.360780,
+    "lon": 149.167151,
+    "alt": 50.0
+  },
+  {
+    "lat": -35.365115,
+    "lon": 149.167647,
+    "alt": 50.0
+  },
+  {
+    "lat": -35.364419,
+    "lon": 149.161575,
+    "alt": 50.0
   }
 ]
