@@ -1,5 +1,5 @@
 use std::sync::{mpsc, Arc, Mutex};
-
+use std::time::Instant;
 use log::*;
 use mavlink::Message;
 
@@ -19,6 +19,7 @@ pub struct MAVLinkVehicle<M: mavlink::Message> {
     vehicle: Arc<Box<dyn mavlink::MavConnection<M> + Sync + Send>>,
     header: Arc<Mutex<mavlink::MavHeader>>,
     pub mission_rx_channel: Arc<Mutex<mpsc::Receiver<MissionMessage>>>,
+    last_message_time: Arc<Mutex<Instant>>,
 }
 
 impl<M: mavlink::Message> MAVLinkVehicle<M> {
@@ -30,6 +31,10 @@ impl<M: mavlink::Message> MAVLinkVehicle<M> {
             Err(mavlink::error::MessageWriteError::Io(error)) => Err(error),
             Ok(something) => Ok(something),
         }
+    }
+
+    pub fn last_received(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Instant>> {
+        self.last_message_time.lock()
     }
 }
 
@@ -64,6 +69,7 @@ impl<M: mavlink::Message> MAVLinkVehicle<M> {
             vehicle: Arc::new(vehicle),
             header: Arc::new(Mutex::new(header)),
             mission_rx_channel: Arc::new(Mutex::new(mission_rx)),
+            last_message_time: Arc::new(Mutex::new(Instant::now())),
         }
     }
 }
@@ -146,6 +152,13 @@ fn receive_message_loop<
                 // println!("id:{}, name:{}, msg: {:?}", msg.message_id(), msg.message_name(), msg);
 
                 // println!("msg:{:?}", msg);
+
+                 // Update the last_message_time
+                 if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
+                    if let Ok(mut last_message_time) = mavlink_vehicle.last_message_time.lock() {
+                        *last_message_time = Instant::now();
+                    }
+                }
 
                 let message_result = mavlink::common::MavMessage::parse(
                     mavlink::MavlinkVersion::V2,

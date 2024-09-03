@@ -9,7 +9,6 @@ use paperclip::actix::{api_v2_operation, Apiv2Schema};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-
 use super::data;
 use super::mavlink_vehicle::{MAVLinkVehicleArcMutex, MissionMessage};
 use super::websocket_manager::WebsocketActor;
@@ -474,6 +473,22 @@ pub async fn mission_post(
     // ok_response("mission uploaded".to_string()).await
 }
 
+fn is_connected(data: &web::Data<MAVLinkVehicleArcMutex>) -> bool {
+    // Attempt to lock the MAVLinkVehicle
+    if let Ok(vehicle) = data.lock() {
+        // Check if we've received any message recently
+        // You might want to adjust the duration based on your requirements
+        const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+        
+        if let Ok(last_received) = vehicle.last_received() {
+            return last_received.elapsed() < TIMEOUT;
+        }
+    }
+    
+    // If we couldn't lock the vehicle or get the last received time, consider it disconnected
+    false
+}
+
 #[api_v2_operation]
 #[allow(clippy::await_holding_lock)]
 /// Send a MAVLink message for the desired vehicle
@@ -482,6 +497,11 @@ pub async fn mavlink_post(
     _req: HttpRequest,
     bytes: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
+
+    if !is_connected(&data) {
+        println!("Please connect to vehicle first");
+    }
+
     let json_string = match String::from_utf8(bytes.to_vec()) {
         Ok(content) => content,
         Err(err) => {
