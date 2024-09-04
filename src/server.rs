@@ -27,11 +27,6 @@ fn add_v1_paths(scope: Scope) -> Scope {
         .route("/helper/mavlink", web::get().to(endpoints::helper_mavlink))
         .route("/mavlink", web::get().to(endpoints::mavlink))
         .route("/mavlink", web::post().to(endpoints::mavlink_post))
-        // For webgcs info dumpping
-        .route("/mavlink/battery", web::get().to(endpoints::get_voltage))
-        .route("/mavlink/gps", web::get().to(endpoints::get_gps))
-        .route("/mavlink/speed", web::get().to(endpoints::get_speed))
-        .route("/mavlink/altitude",web::get().to(endpoints::get_altitude))
         .route("/mission", web::post().to(endpoints::mission_post))
         .route("/mission_get", web::post().to(endpoints::mission_get)) 
         .route(r"/mavlink/{path:.*}", web::get().to(endpoints::mavlink))
@@ -69,7 +64,6 @@ pub fn run(server_address: &str, mavlink_vehicle: &MAVLinkVehicleArcMutex) {
             )
             .route("/info", web::get().to(endpoints::info))
             .route("/connect", web::post().to(endpoints::connect))
-            .route("/do_cmd", web::get().to(endpoints::do_cmd))
             // Be sure to have default as the latest endpoint, otherwise it does not work
             .service(v1)
             .service(default)

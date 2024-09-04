@@ -6,6 +6,7 @@ use actix_web_actors::ws;
 use include_dir::{include_dir, Dir};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use paperclip::actix::{api_v2_operation, Apiv2Schema};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -76,8 +77,7 @@ struct Waypoint {
 
 #[derive(Apiv2Schema, Deserialize)]
 pub struct JWTInfo {
-    username: String,
-    _password: String,
+    connect_string: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -85,6 +85,7 @@ struct Claims {
     sub: String,
     exp: usize,
 }
+
 
 fn load_html_file(filename: &str) -> Option<String> {
     if let Some(file) = HTML_DIST.get_file(filename) {
@@ -115,7 +116,13 @@ pub fn root(req: HttpRequest) -> HttpResponse {
         .body("File does not exist");
 }
 
-fn create_jwt(user_id: &str) -> String {
+fn create_jwt(user_id: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let pattern = Regex::new(r"^udpin://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+$");
+
+    if !pattern?.is_match(user_id) {
+        return Err("Invalid format. Expected: udpin://ip:port_number".into());
+    }
+
     let expiration = chrono::Utc::now()
     .checked_add_signed(chrono::Duration::hours(1))
     .expect("valid timestamp")
@@ -127,7 +134,8 @@ fn create_jwt(user_id: &str) -> String {
     };
 
     let header = Header::new(Algorithm::HS256);
-    encode(&header, &claims, &EncodingKey::from_secret("secret".as_ref())).unwrap()
+    encode(&header, &claims, &EncodingKey::from_secret("secret".as_ref()))
+        .map_err(|_| "Failed to connect".into())
 }
 
 fn validate_token(token: &str) -> bool {
@@ -137,38 +145,34 @@ fn validate_token(token: &str) -> bool {
 
 #[api_v2_operation]
 pub async fn connect(info: web::Json<JWTInfo>) -> actix_web::Result<HttpResponse> {
-    let token = create_jwt(&info.username);
+    let token = match create_jwt(&info.connect_string) {
+        Ok(t) => t,
+        Err(e) => {
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "error": format!("Failed to connect vehilce: {}", e)
+            })));
+        },
+    };
      // Create the JSON value
-     let json_value = serde_json::json!({ "token": token });
+    let json_value = serde_json::json!({ "token": token });
      // Convert JSON to a string
-     let json_string = serde_json::to_string(&json_value)?;
-     ok_response(json_string).await
+    let json_string = serde_json::to_string(&json_value)?;
+    ok_response(json_string).await
 }
 
-#[api_v2_operation]
-pub async fn do_cmd(req: HttpRequest) -> actix_web::Result<HttpResponse> {
-    if let Some(_token) = req.headers().get("Authorization")
+// Helper function for token validation
+fn validate_auth_token(req: &HttpRequest) -> Result<(), &'static str> {
+    let token = req.headers()
+        .get("Authorization")
         .and_then(|value| value.to_str().ok())
         .and_then(|auth| auth.strip_prefix("Bearer "))
-        .filter(|token| validate_token(token))
-        {
-            let json_value =  serde_json::json!({
-                "message": "You can do command!",
-                "status": "success"
-            });
-            let json_string = serde_json::to_string(&json_value)?;
-            ok_response(json_string).await 
+        .ok_or("Missing Authorization token")?;
 
-        } else {
-            let json_value =  serde_json::json!({
-                "message": "You can not do command!",
-                "status": "error"
-            });
-            let json_string = serde_json::to_string(&json_value)?;
-            ok_response(json_string).await
-        }
-    
-
+    if validate_token(token) {
+        Ok(())
+    } else {
+        Err("Invalid or expired token")
+    }
 }
 
 #[api_v2_operation]
@@ -186,42 +190,6 @@ pub async fn info() -> Json<Info> {
     };
 
     Json(info)
-}
-
-#[api_v2_operation]
-/// Provide information related to GPS(coordinate),
-/// include: lat: latitude, lon: longitude
-pub async fn get_gps(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
-    let path = "vehicles/1/components/1/messages/GPS_RAW_INT/message";
-    let message = data::messages().pointer(&path);
-    ok_response(message).await
-}
-
-#[api_v2_operation]
-/// Provide information related to SPEED,
-/// include: airspeed, groundspeed
-pub async fn get_speed(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
-    let path = "vehicles/1/components/1/messages/VFR_HUD/message";
-    let message = data::messages().pointer(&path);
-    ok_response(message).await
-}
-
-#[api_v2_operation]
-/// Provided information related to BATTERY,
-/// include: voltage_battery, current_battery, battery_remain
-pub async fn get_voltage(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
-    let path = "vehicles/1/components/1/messages/SYS_STATUS/message";
-    let message = data::messages().pointer(&path);
-    ok_response(message).await
-}
-
-#[api_v2_operation]
-/// Provided information related to ATTITUDE,
-/// include: roll, pitch, yaw
-pub async fn get_altitude(_req: HttpRequest) -> actix_web::Result<HttpResponse> {
-    let path = "vehicles/1/components/1/messages/ATTITUDE/message";
-    let message = data::messages().pointer(&path);
-    ok_response(message).await
 }
 
 #[api_v2_operation]
@@ -494,13 +462,15 @@ fn is_connected(data: &web::Data<MAVLinkVehicleArcMutex>) -> bool {
 /// Send a MAVLink message for the desired vehicle
 pub async fn mavlink_post(
     data: web::Data<MAVLinkVehicleArcMutex>,
-    _req: HttpRequest,
+    req: HttpRequest,
     bytes: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
 
-    if !is_connected(&data) {
-        println!("Please connect to vehicle first");
-    }
+    validate_auth_token(&req).map_err(|e| {
+        actix_web::error::ErrorUnauthorized(serde_json::json!({
+            "error": e
+        }))
+    })?;
 
     let json_string = match String::from_utf8(bytes.to_vec()) {
         Ok(content) => content,
@@ -551,11 +521,6 @@ pub async fn mavlink_post(
     .await
 }
 
-#[api_v2_operation]
-/// Drone Assembly
-pub async fn assembly() -> actix_web::Result<HttpResponse> {
-    ok_response("assemb".to_string()).await
-}
 
 #[api_v2_operation]
 /// Websocket used to receive and send MAVLink messages asynchronously
