@@ -138,10 +138,7 @@ fn create_jwt(user_id: &str) -> Result<String, Box<dyn std::error::Error>> {
         .map_err(|_| "Failed to connect".into())
 }
 
-fn validate_token(token: &str) -> bool {
-    let validation = Validation::new(Algorithm::HS256);
-    decode::<Claims>(token, &DecodingKey::from_secret("secret".as_ref()), &validation).is_ok()
-}
+
 
 #[api_v2_operation]
 pub async fn connect(info: web::Json<JWTInfo>) -> actix_web::Result<HttpResponse> {
@@ -158,6 +155,11 @@ pub async fn connect(info: web::Json<JWTInfo>) -> actix_web::Result<HttpResponse
      // Convert JSON to a string
     let json_string = serde_json::to_string(&json_value)?;
     ok_response(json_string).await
+}
+
+fn validate_token(token: &str) -> bool {
+    let validation = Validation::new(Algorithm::HS256);
+    decode::<Claims>(token, &DecodingKey::from_secret("secret".as_ref()), &validation).is_ok()
 }
 
 // Helper function for token validation
@@ -446,13 +448,10 @@ fn is_connected(data: &web::Data<MAVLinkVehicleArcMutex>) -> bool {
     if let Ok(vehicle) = data.lock() {
         // Check if we've received any message recently
         // You might want to adjust the duration based on your requirements
-        const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-        
         if let Ok(last_received) = vehicle.last_received() {
-            return last_received.elapsed() < TIMEOUT;
+            return last_received.elapsed() < std::time::Duration::from_secs(5);
         }
     }
-    
     // If we couldn't lock the vehicle or get the last received time, consider it disconnected
     false
 }
@@ -466,11 +465,16 @@ pub async fn mavlink_post(
     bytes: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
 
+    if !is_connected(&data) {
+        return ok_response("Please connect to vehicle first.".to_string()).await; 
+    }
+
+    /* 
     validate_auth_token(&req).map_err(|e| {
         actix_web::error::ErrorUnauthorized(serde_json::json!({
             "error": e
         }))
-    })?;
+    })?; */
 
     let json_string = match String::from_utf8(bytes.to_vec()) {
         Ok(content) => content,

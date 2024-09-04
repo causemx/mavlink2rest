@@ -5,9 +5,14 @@
     "sequence": 0
   },
   "message": {
-    "type":"COMMAND_LONG",
+    "type": "COMMAND_LONG",
     "param1": 1.0,
-    "param2": 0.0,"param3":0.0,"param4":0.0,"param5":0.0,"param6":0.0,"param7":0.0,
+    "param2": 0.0,
+    "param3": 0.0,
+    "param4": 0.0,
+    "param5": 0.0,
+    "param6": 0.0,
+    "param7": 0.0,
     "command": {
       "type": "MAV_CMD_COMPONENT_ARM_DISARM"
     },

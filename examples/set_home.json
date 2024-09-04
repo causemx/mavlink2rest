@@ -1,0 +1,23 @@
+{
+    "header": {
+      "system_id": 255,
+      "component_id": 240,
+      "sequence": 0
+    },
+    "message": {
+      "type": "COMMAND_LONG",
+      "param1": 0.0,
+      "param2": 0.0,
+      "param3": 0.0,
+      "param4": 0.0,
+      "param5": 47.397742,
+      "param6": 8.545594,
+      "param7": 488.0,
+      "command": {
+        "type": "MAV_CMD_DO_SET_HOME"
+      },
+      "target_system": 1,
+      "target_component": 1,
+      "confirmation": 1
+    }
+  }
