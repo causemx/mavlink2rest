@@ -15,7 +15,7 @@ use super::mavlink_vehicle::{MAVLinkVehicleArcMutex, MissionMessage};
 use super::websocket_manager::WebsocketActor;
 
 use log::*;
-use mavlink::Message;
+use mavlink::{common::PositionTargetTypemask, Message};
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -74,6 +74,12 @@ struct Waypoint {
     mission_type: u8,
 }
 
+#[derive(Deserialize)]
+struct TargetLocation {
+    lat: f64,
+    lon: f64,
+    alt: f32,
+}
 
 #[derive(Apiv2Schema, Deserialize)]
 pub struct JWTInfo {
@@ -157,11 +163,13 @@ pub async fn connect(info: web::Json<JWTInfo>) -> actix_web::Result<HttpResponse
     ok_response(json_string).await
 }
 
+#[allow(dead_code)]
 fn validate_token(token: &str) -> bool {
     let validation = Validation::new(Algorithm::HS256);
     decode::<Claims>(token, &DecodingKey::from_secret("secret".as_ref()), &validation).is_ok()
 }
 
+#[allow(dead_code)]
 // Helper function for token validation
 fn validate_auth_token(req: &HttpRequest) -> Result<(), &'static str> {
     let token = req.headers()
@@ -243,6 +251,45 @@ pub async fn helper_mavlink(
 }
 
 #[api_v2_operation]
+pub async fn fly_to(
+    data: web::Data<MAVLinkVehicleArcMutex>,
+    bytes: web::Bytes
+) -> actix_web::Result<HttpResponse> {
+
+    let target_location: TargetLocation = serde_json::from_slice(&bytes)?;
+
+    let set_global_position_int_data = mavlink::common::MavMessage::SET_POSITION_TARGET_GLOBAL_INT(
+        mavlink::common::SET_POSITION_TARGET_GLOBAL_INT_DATA {
+            target_system: 1,
+            target_component: 1,
+            time_boot_ms: 0,
+            coordinate_frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+            type_mask: PositionTargetTypemask::empty()
+            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_VX_IGNORE
+            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_VY_IGNORE
+            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_VZ_IGNORE
+            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_AX_IGNORE
+            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_AY_IGNORE
+            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_AZ_IGNORE
+            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_YAW_IGNORE
+            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE,
+            lat_int: (target_location.lat * 1e7) as i32,  // Latitude in degrees * 1e7
+            lon_int: (target_location.lon * 1e7) as i32 ,   // Longitude in degrees * 1e7
+            alt: target_location.alt,
+            vx: 0.0, vy: 0.0, vz: 0.0,
+            afx: 0.0, afy: 0.0, afz: 0.0,
+            yaw: 0.0, yaw_rate: 0.0,
+        });
+    
+    let set_global_position_int_msg = mavlink::ardupilotmega::MavMessage::common(set_global_position_int_data);
+    match data.lock().unwrap().send(&mavlink::MavHeader::default(), &set_global_position_int_msg) {
+        Ok(r) => { ok_response(format!("ack: {}", r)).await},
+        Err(_) => todo!(),
+    }
+
+}
+
+#[api_v2_operation]
 pub async fn mission_get(
     data: web::Data<MAVLinkVehicleArcMutex>,
     _req: HttpRequest,
@@ -310,12 +357,7 @@ pub async fn mission_get(
     ok_response(serde_json::to_string(&mission_data)?).await
 }
 
-#[derive(Deserialize)]
-struct TargetLocation {
-    lat: f64,
-    lon: f64,
-    alt: f32,
-}
+
 
 #[api_v2_operation]
 pub async fn mission_post(
@@ -461,7 +503,7 @@ fn is_connected(data: &web::Data<MAVLinkVehicleArcMutex>) -> bool {
 /// Send a MAVLink message for the desired vehicle
 pub async fn mavlink_post(
     data: web::Data<MAVLinkVehicleArcMutex>,
-    req: HttpRequest,
+    _req: HttpRequest,
     bytes: web::Bytes,
 ) -> actix_web::Result<HttpResponse> {
 
