@@ -1,21 +1,18 @@
-use actix_web::{
-    web::{self, Json},
-    HttpRequest, HttpResponse,
-};
+use actix_web::{ web::{ self, Json }, HttpRequest, HttpResponse };
 use actix_web_actors::ws;
-use include_dir::{include_dir, Dir};
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use paperclip::actix::{api_v2_operation, Apiv2Schema};
+use include_dir::{ include_dir, Dir };
+use jsonwebtoken::{ decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation };
+use paperclip::actix::{ api_v2_operation, Apiv2Schema };
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::{ Deserialize, Serialize };
 use std::path::Path;
 
 use super::data;
-use super::mavlink_vehicle::{MAVLinkVehicleArcMutex, MissionMessage};
+use super::mavlink_vehicle::{ MAVLinkVehicleArcMutex, MissionMessage };
 use super::websocket_manager::WebsocketActor;
 
 use log::*;
-use mavlink::{common::PositionTargetTypemask, Message};
+use mavlink::{ common::PositionTargetTypemask, Message };
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -92,7 +89,6 @@ struct Claims {
     exp: usize,
 }
 
-
 fn load_html_file(filename: &str) -> Option<String> {
     if let Some(file) = HTML_DIST.get_file(filename) {
         return Some(file.contents_utf8().unwrap().to_string());
@@ -115,11 +111,9 @@ pub fn root(req: HttpRequest) -> HttpResponse {
         let mime = actix_files::file_extension_to_mime(extension).to_string();
 
         return HttpResponse::Ok().content_type(mime).body(content);
-    };
+    }
 
-    return HttpResponse::NotFound()
-        .content_type("text/plain")
-        .body("File does not exist");
+    return HttpResponse::NotFound().content_type("text/plain").body("File does not exist");
 }
 
 fn create_jwt(user_id: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -129,10 +123,11 @@ fn create_jwt(user_id: &str) -> Result<String, Box<dyn std::error::Error>> {
         return Err("Invalid format. Expected: udpin://ip:port_number".into());
     }
 
-    let expiration = chrono::Utc::now()
-    .checked_add_signed(chrono::Duration::hours(1))
-    .expect("valid timestamp")
-    .timestamp();
+    let expiration = chrono::Utc
+        ::now()
+        .checked_add_signed(chrono::Duration::hours(1))
+        .expect("valid timestamp")
+        .timestamp();
 
     let claims = Claims {
         sub: user_id.to_owned(),
@@ -140,25 +135,28 @@ fn create_jwt(user_id: &str) -> Result<String, Box<dyn std::error::Error>> {
     };
 
     let header = Header::new(Algorithm::HS256);
-    encode(&header, &claims, &EncodingKey::from_secret("secret".as_ref()))
-        .map_err(|_| "Failed to connect".into())
+    encode(&header, &claims, &EncodingKey::from_secret("secret".as_ref())).map_err(|_|
+        "Failed to connect".into()
+    )
 }
-
-
 
 #[api_v2_operation]
 pub async fn connect(info: web::Json<JWTInfo>) -> actix_web::Result<HttpResponse> {
     let token = match create_jwt(&info.connect_string) {
         Ok(t) => t,
         Err(e) => {
-            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            return Ok(
+                HttpResponse::BadRequest().json(
+                    serde_json::json!({
                 "error": format!("Failed to connect vehilce: {}", e)
-            })));
-        },
+            })
+                )
+            );
+        }
     };
-     // Create the JSON value
+    // Create the JSON value
     let json_value = serde_json::json!({ "token": token });
-     // Convert JSON to a string
+    // Convert JSON to a string
     let json_string = serde_json::to_string(&json_value)?;
     ok_response(json_string).await
 }
@@ -172,7 +170,8 @@ fn validate_token(token: &str) -> bool {
 #[allow(dead_code)]
 // Helper function for token validation
 fn validate_auth_token(req: &HttpRequest) -> Result<(), &'static str> {
-    let token = req.headers()
+    let token = req
+        .headers()
         .get("Authorization")
         .and_then(|value| value.to_str().ok())
         .and_then(|auth| auth.strip_prefix("Bearer "))
@@ -220,7 +219,7 @@ pub fn parse_query<T: serde::ser::Serialize>(message: &T) -> String {
 /// Returns a MAVLink message matching the given message name
 pub async fn helper_mavlink(
     _req: HttpRequest,
-    query: web::Query<MAVLinkHelperQuery>,
+    query: web::Query<MAVLinkHelperQuery>
 ) -> actix_web::Result<HttpResponse> {
     let message_name = query.into_inner().name;
 
@@ -233,15 +232,20 @@ pub async fn helper_mavlink(
         Ok(result) => {
             let msg = match result {
                 mavlink::ardupilotmega::MavMessage::common(msg) => {
-                    parse_query(&data::MAVLinkMessage {
-                        header: mavlink::MavHeader::default(),
-                        message: msg,
-                    })
+                    parse_query(
+                        &(data::MAVLinkMessage {
+                            header: mavlink::MavHeader::default(),
+                            message: msg,
+                        })
+                    )
                 }
-                msg => parse_query(&data::MAVLinkMessage {
-                    header: mavlink::MavHeader::default(),
-                    message: msg,
-                }),
+                msg =>
+                    parse_query(
+                        &(data::MAVLinkMessage {
+                            header: mavlink::MavHeader::default(),
+                            message: msg,
+                        })
+                    ),
             };
 
             ok_response(msg).await
@@ -255,7 +259,6 @@ pub async fn fly_to(
     data: web::Data<MAVLinkVehicleArcMutex>,
     bytes: web::Bytes
 ) -> actix_web::Result<HttpResponse> {
-
     let target_location: TargetLocation = serde_json::from_slice(&bytes)?;
 
     let set_global_position_int_data = mavlink::common::MavMessage::SET_POSITION_TARGET_GLOBAL_INT(
@@ -264,35 +267,57 @@ pub async fn fly_to(
             target_component: 1,
             time_boot_ms: 0,
             coordinate_frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-            type_mask: PositionTargetTypemask::empty()
-            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_VX_IGNORE
-            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_VY_IGNORE
-            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_VZ_IGNORE
-            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_AX_IGNORE
-            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_AY_IGNORE
-            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_AZ_IGNORE
-            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_YAW_IGNORE
-            | PositionTargetTypemask::POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE,
-            lat_int: (target_location.lat * 1e7) as i32,  // Latitude in degrees * 1e7
-            lon_int: (target_location.lon * 1e7) as i32 ,   // Longitude in degrees * 1e7
+            type_mask: PositionTargetTypemask::empty() |
+            PositionTargetTypemask::POSITION_TARGET_TYPEMASK_VX_IGNORE |
+            PositionTargetTypemask::POSITION_TARGET_TYPEMASK_VY_IGNORE |
+            PositionTargetTypemask::POSITION_TARGET_TYPEMASK_VZ_IGNORE |
+            PositionTargetTypemask::POSITION_TARGET_TYPEMASK_AX_IGNORE |
+            PositionTargetTypemask::POSITION_TARGET_TYPEMASK_AY_IGNORE |
+            PositionTargetTypemask::POSITION_TARGET_TYPEMASK_AZ_IGNORE |
+            PositionTargetTypemask::POSITION_TARGET_TYPEMASK_YAW_IGNORE |
+            PositionTargetTypemask::POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE,
+            lat_int: (target_location.lat * 1e7) as i32, // Latitude in degrees * 1e7
+            lon_int: (target_location.lon * 1e7) as i32, // Longitude in degrees * 1e7
             alt: target_location.alt,
-            vx: 0.0, vy: 0.0, vz: 0.0,
-            afx: 0.0, afy: 0.0, afz: 0.0,
-            yaw: 0.0, yaw_rate: 0.0,
-        });
-    
-    let set_global_position_int_msg = mavlink::ardupilotmega::MavMessage::common(set_global_position_int_data);
+            vx: 0.0,
+            vy: 0.0,
+            vz: 0.0,
+            afx: 0.0,
+            afy: 0.0,
+            afz: 0.0,
+            yaw: 0.0,
+            yaw_rate: 0.0,
+        }
+    );
+
+    let set_global_position_int_msg = mavlink::ardupilotmega::MavMessage::common(
+        set_global_position_int_data
+    );
     match data.lock().unwrap().send(&mavlink::MavHeader::default(), &set_global_position_int_msg) {
-        Ok(r) => { ok_response(format!("ack: {}", r)).await},
+        Ok(r) => { ok_response(format!("ack: {}", r)).await }
         Err(_) => todo!(),
     }
+}
 
+#[api_v2_operation]
+pub async fn mission_clear(data: web::Data<MAVLinkVehicleArcMutex>, _req: HttpRequest) -> actix_web::Result<HttpResponse> {
+    let mission_clear_all = mavlink::common::MavMessage::MISSION_CLEAR_ALL(
+        mavlink::common::MISSION_CLEAR_ALL_DATA {
+            target_system: 1,
+            target_component: 1,
+            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+        }
+    );
+
+    let mission_clear_all_data = mavlink::ardupilotmega::MavMessage::common(mission_clear_all);
+    data.lock().unwrap().send(&mavlink::MavHeader::default(), &mission_clear_all_data)?;
+    ok_response("mission clear sended".to_string()).await
 }
 
 #[api_v2_operation]
 pub async fn mission_get(
     data: web::Data<MAVLinkVehicleArcMutex>,
-    _req: HttpRequest,
+    _req: HttpRequest
 ) -> actix_web::Result<HttpResponse> {
     let mission_request_list_data = mavlink::common::MISSION_REQUEST_LIST_DATA {
         target_component: 1,
@@ -301,7 +326,7 @@ pub async fn mission_get(
     };
 
     let mission_request_list = mavlink::ardupilotmega::MavMessage::common(
-        mavlink::common::MavMessage::MISSION_REQUEST_LIST(mission_request_list_data),
+        mavlink::common::MavMessage::MISSION_REQUEST_LIST(mission_request_list_data)
     );
 
     {
@@ -320,7 +345,9 @@ pub async fn mission_get(
     let mission_rx = mission_rx.lock().unwrap();
     let mission_count = match mission_rx.recv() {
         Ok(MissionMessage::Count(count)) => count,
-        _ => return not_found_response("Failed to receive mission count".to_string()).await,
+        _ => {
+            return not_found_response("Failed to receive mission count".to_string()).await;
+        }
     };
 
     // Collect mission items
@@ -333,23 +360,22 @@ pub async fn mission_get(
         };
 
         let mission_request_int = mavlink::ardupilotmega::MavMessage::common(
-            mavlink::common::MavMessage::MISSION_REQUEST_INT(mission_request_int_data),
+            mavlink::common::MavMessage::MISSION_REQUEST_INT(mission_request_int_data)
         );
 
-        data.lock()
-            .unwrap()
-            .send(&mavlink::MavHeader::default(), &mission_request_int)?;
+        data.lock().unwrap().send(&mavlink::MavHeader::default(), &mission_request_int)?;
         match mission_rx.recv() {
             Ok(MissionMessage::Item(item)) => {
                 mission_items.push(item);
             }
             _ => {
-                return not_found_response("Failed to receive all mission items".to_string()).await
+                return not_found_response("Failed to receive all mission items".to_string()).await;
             }
         }
     }
 
-    let mission_data = serde_json::json!({
+    let mission_data =
+        serde_json::json!({
         "count": mission_count,
         "items": mission_items,
     });
@@ -357,130 +383,135 @@ pub async fn mission_get(
     ok_response(serde_json::to_string(&mission_data)?).await
 }
 
-
-
 #[api_v2_operation]
 pub async fn mission_post(
     data: web::Data<MAVLinkVehicleArcMutex>,
     _req: HttpRequest,
-    bytes: web::Bytes,
+    bytes: web::Bytes
 ) -> actix_web::Result<HttpResponse> {
     let json_string = String::from_utf8(bytes.to_vec()).unwrap();
     let target_locations: Vec<TargetLocation> = serde_json::from_str(&json_string)?;
     info!("Received {} waypoints", target_locations.len());
 
-    let vehicle = data.lock().map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let vehicle = data
+        .lock()
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
     let mission_rx = vehicle.mission_rx_channel.clone();
 
     // Send mission count
-    let mission_count = mavlink::common::MavMessage::MISSION_COUNT(mavlink::common::MISSION_COUNT_DATA {
-        target_system: 1,
-        target_component: 1,
-        count: (target_locations.len() + 1) as u16,  // +2 for home and takeoff
-        mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
-    });
-    
-    vehicle.send(&mavlink::MavHeader::default(), &mavlink::ardupilotmega::MavMessage::common(mission_count))?;
-    drop(vehicle);  // Release the lock on the vehicle
+    let mission_count = mavlink::common::MavMessage::MISSION_COUNT(
+        mavlink::common::MISSION_COUNT_DATA {
+            target_system: 1,
+            target_component: 1,
+            count: (target_locations.len() + 1) as u16, // +2 for home and takeoff
+            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+        }
+    );
 
-    let mission_rx = mission_rx.lock().map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    vehicle.send(
+        &mavlink::MavHeader::default(),
+        &mavlink::ardupilotmega::MavMessage::common(mission_count)
+    )?;
+    drop(vehicle); // Release the lock on the vehicle
 
-     // This loop will run until we receive a valid MISSION_ACK message
-     for expected_seq in 0..target_locations.len() + 2 {
+    let mission_rx = mission_rx
+        .lock()
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+
+    // This loop will run until we receive a valid MISSION_ACK message
+    for expected_seq in 0..target_locations.len() + 1 {
         match mission_rx.recv_timeout(TIMEOUT) {
             Ok(MissionMessage::Request(seq)) => {
                 info!("Received MISSION_REQUEST for sequence number: {}", seq);
-                if seq == expected_seq as u16 {
+                if seq == (expected_seq as u16) {
                     let message = if seq == 0 {
                         // Home location (0th mission item)
                         info!("Sending home location (sequence 0)");
-                        mavlink::common::MavMessage::MISSION_ITEM_INT(mavlink::common::MISSION_ITEM_INT_DATA {
-                            target_system: 1,
-                            target_component: 1,
-                            seq,
-                            frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL,
-                            command: mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
-                            current: 0,
-                            autocontinue: 0,
-                            param1: 0.0,
-                            param2: 0.0,
-                            param3: 0.0,
-                            param4: 0.0,
-                            x: 0,
-                            y: 0,
-                            z: 0.0,
-                            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
-                        })
-                    } else if seq == 1 {
-                        // Takeoff command
-                        info!("Sending takeoff command (sequence 1)");
-                        mavlink::common::MavMessage::MISSION_ITEM_INT(mavlink::common::MISSION_ITEM_INT_DATA {
-                            target_system: 1,
-                            target_component: 1,
-                            seq,
-                            frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
-                            command: mavlink::common::MavCmd::MAV_CMD_NAV_TAKEOFF,
-                            current: 0,
-                            autocontinue: 0,
-                            param1: 0.0,
-                            param2: 0.0,
-                            param3: 0.0,
-                            param4: 0.0,
-                            x: 0,
-                            y: 0,
-                            z: target_locations[0].alt,
-                            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
-                        })
+                        mavlink::common::MavMessage::MISSION_ITEM_INT(
+                            mavlink::common::MISSION_ITEM_INT_DATA {
+                                target_system: 1,
+                                target_component: 1,
+                                seq,
+                                frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                                command: mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
+                                current: 0,
+                                autocontinue: 0,
+                                param1: 0.0,
+                                param2: 0.0,
+                                param3: 0.0,
+                                param4: 0.0,
+                                x: 0,
+                                y: 0,
+                                z: 0.0,
+                                mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+                            }
+                        )
                     } else {
                         // Target locations
-                        let location = &target_locations[seq as usize - 2];
-                        info!("Sending waypoint {} (sequence {})", seq - 1, seq);
-                        mavlink::common::MavMessage::MISSION_ITEM_INT(mavlink::common::MISSION_ITEM_INT_DATA {
-                            target_system: 1,
-                            target_component: 1,
-                            seq,
-                            frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
-                            command: mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
-                            current: 0,
-                            autocontinue: 0,
-                            param1: 0.0,
-                            param2: 0.0,
-                            param3: 0.0,
-                            param4: 0.0,
-                            x: (location.lat * 1e7) as i32,
-                            y: (location.lon * 1e7) as i32,
-                            z: location.alt,
-                            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
-                        })
+                        info!("Sending waypoint {} (sequence {})", seq, seq);
+                        mavlink::common::MavMessage::MISSION_ITEM_INT(
+                            mavlink::common::MISSION_ITEM_INT_DATA {
+                                target_system: 1,
+                                target_component: 1,
+                                seq,
+                                frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
+                                command: mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
+                                current: 0,
+                                autocontinue: 0,
+                                param1: 0.0,
+                                param2: 0.0,
+                                param3: 0.0,
+                                param4: 0.0,
+                                x: (target_locations[expected_seq-1].lat * 1e7) as i32,
+                                y: (target_locations[expected_seq-1].lon * 1e7) as i32,
+                                z: target_locations[expected_seq-1].alt,
+                                mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+                            }
+                        )
                     };
 
-                    data.lock()
+                    data
+                        .lock()
                         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?
                         .send(&mavlink::MavHeader::default(), &mavlink::ardupilotmega::MavMessage::common(message))?;
                     info!("Sent MISSION_ITEM_INT for sequence number: {}", seq);
                 } else {
                     warn!("Received out-of-sequence request: expected {}, got {}", expected_seq, seq);
-                    return Ok(HttpResponse::BadRequest().body(format!("Received out-of-sequence request: expected {}, got {}", expected_seq, seq)));
+                    return Ok(
+                        HttpResponse::BadRequest().body(
+                            format!("Received out-of-sequence request: expected {}, got {}", expected_seq, seq)
+                        )
+                    );
                 }
-            },
-            Ok(MissionMessage::Ack(ack)) if ack == mavlink::common::MavMissionResult::MAV_MISSION_ACCEPTED => {
+            }
+            Ok(MissionMessage::Ack(ack)) if
+                ack == mavlink::common::MavMissionResult::MAV_MISSION_ACCEPTED
+            => {
                 info!("Received MISSION_ACK: Mission accepted");
                 return Ok(HttpResponse::Ok().body("Mission upload successful"));
-            },
+            }
             Ok(other) => {
                 warn!("Received unexpected mission message: {:?}", other);
                 return Ok(HttpResponse::BadRequest().body("Received unexpected mission message"));
-            },
+            }
             Err(_) => {
                 warn!("Timeout waiting for mission request {}", expected_seq);
-                return Ok(HttpResponse::RequestTimeout().body(format!("Timeout waiting for mission request {}", expected_seq)));
-            },
+                return Ok(
+                    HttpResponse::RequestTimeout().body(
+                        format!("Timeout waiting for mission request {}", expected_seq)
+                    )
+                );
+            }
         }
     }
 
     // If we've exited the loop without returning, it means we didn't receive a MISSION_ACK
     warn!("Mission upload incomplete: did not receive final acknowledgement");
-    Ok(HttpResponse::InternalServerError().body("Mission upload incomplete: did not receive final acknowledgement"))
+    Ok(
+        HttpResponse::InternalServerError().body(
+            "Mission upload incomplete: did not receive final acknowledgement"
+        )
+    )
 
     // ok_response("mission uploaded".to_string()).await
 }
@@ -504,11 +535,10 @@ fn is_connected(data: &web::Data<MAVLinkVehicleArcMutex>) -> bool {
 pub async fn mavlink_post(
     data: web::Data<MAVLinkVehicleArcMutex>,
     _req: HttpRequest,
-    bytes: web::Bytes,
+    bytes: web::Bytes
 ) -> actix_web::Result<HttpResponse> {
-
     if !is_connected(&data) {
-        return ok_response("Please connect to vehicle first.".to_string()).await; 
+        return ok_response("Please connect to vehicle first.".to_string()).await;
     }
 
     /* 
@@ -521,15 +551,19 @@ pub async fn mavlink_post(
     let json_string = match String::from_utf8(bytes.to_vec()) {
         Ok(content) => content,
         Err(err) => {
-            return not_found_response(format!("Failed to parse input as UTF-8 string: {err:?}"))
-                .await;
+            return not_found_response(
+                format!("Failed to parse input as UTF-8 string: {err:?}")
+            ).await;
         }
     };
 
     debug!("MAVLink post received: {json_string}");
 
-    if let Ok(content) =
-        json5::from_str::<data::MAVLinkMessage<mavlink::ardupilotmega::MavMessage>>(&json_string)
+    if
+        let Ok(content) =
+            json5::from_str::<data::MAVLinkMessage<mavlink::ardupilotmega::MavMessage>>(
+                &json_string
+            )
     {
         match data.lock().unwrap().send(&content.header, &content.message) {
             Ok(_result) => {
@@ -537,20 +571,18 @@ pub async fn mavlink_post(
                 return HttpResponse::Ok().await;
             }
             Err(err) => {
-                return not_found_response(format!("Failed to send message: {err:?}")).await
+                return not_found_response(format!("Failed to send message: {err:?}")).await;
             }
         }
     }
 
-    if let Ok(content) =
-        json5::from_str::<data::MAVLinkMessage<mavlink::common::MavMessage>>(&json_string)
+    if
+        let Ok(content) = json5::from_str::<data::MAVLinkMessage<mavlink::common::MavMessage>>(
+            &json_string
+        )
     {
         let content_ardupilotmega = mavlink::ardupilotmega::MavMessage::common(content.message);
-        match data
-            .lock()
-            .unwrap()
-            .send(&content.header, &content_ardupilotmega)
-        {
+        match data.lock().unwrap().send(&content.header, &content_ardupilotmega) {
             Ok(_result) => {
                 data::update((content.header, content_ardupilotmega));
                 return HttpResponse::Ok().await;
@@ -561,19 +593,15 @@ pub async fn mavlink_post(
         }
     }
 
-    not_found_response(String::from(
-        "Failed to parse message, not a valid MAVLinkMessage.",
-    ))
-    .await
+    not_found_response(String::from("Failed to parse message, not a valid MAVLinkMessage.")).await
 }
-
 
 #[api_v2_operation]
 /// Websocket used to receive and send MAVLink messages asynchronously
 pub async fn websocket(
     req: HttpRequest,
     query: web::Query<WebsocketQuery>,
-    stream: web::Payload,
+    stream: web::Payload
 ) -> Result<HttpResponse, actix_web::Error> {
     let filter = match query.into_inner().filter {
         Some(filter) => filter,
@@ -586,15 +614,9 @@ pub async fn websocket(
 }
 
 async fn not_found_response(message: String) -> actix_web::Result<HttpResponse> {
-    HttpResponse::NotFound()
-        .content_type("application/json")
-        .body(message)
-        .await
+    HttpResponse::NotFound().content_type("application/json").body(message).await
 }
 
 async fn ok_response(message: String) -> actix_web::Result<HttpResponse> {
-    HttpResponse::Ok()
-        .content_type("application/json")
-        .body(message)
-        .await
+    HttpResponse::Ok().content_type("application/json").body(message).await
 }
