@@ -300,7 +300,10 @@ pub async fn fly_to(
 }
 
 #[api_v2_operation]
-pub async fn mission_clear(data: web::Data<MAVLinkVehicleArcMutex>, _req: HttpRequest) -> actix_web::Result<HttpResponse> {
+pub async fn mission_clear(
+    data: web::Data<MAVLinkVehicleArcMutex>,
+    _req: HttpRequest
+) -> actix_web::Result<HttpResponse> {
     let mission_clear_all = mavlink::common::MavMessage::MISSION_CLEAR_ALL(
         mavlink::common::MISSION_CLEAR_ALL_DATA {
             target_system: 1,
@@ -514,6 +517,39 @@ pub async fn mission_post(
     )
 
     // ok_response("mission uploaded".to_string()).await
+}
+
+#[api_v2_operation]
+pub async fn set_fence(
+    data: web::Data<MAVLinkVehicleArcMutex>,
+    _req: HttpRequest, 
+) -> actix_web::Result<HttpResponse> {
+
+    // Define fence points (example coordinates)
+    let fence_points = vec![
+        (37.4220, -122.0841),  // Point 1
+        (37.4230, -122.0841),  // Point 2
+        (37.4230, -122.0831),  // Point 3
+        (37.4220, -122.0831),  // Point 4
+    ];
+
+    for (index, (lat, lng)) in fence_points.iter().enumerate() {
+        let fence_point = mavlink::ardupilotmega::MavMessage::FENCE_POINT(
+            mavlink::ardupilotmega::FENCE_POINT_DATA {
+                target_system: 1,
+                target_component: 1,
+                idx: index as u8,
+                count: fence_points.len() as u8,
+                lat: *lat,
+                lng: *lng,
+            }
+        );
+
+        data.lock().unwrap().send(&mavlink::MavHeader::default(), &fence_point)?;
+    }
+
+
+    ok_response("fence setup".to_string()).await
 }
 
 fn is_connected(data: &web::Data<MAVLinkVehicleArcMutex>) -> bool {
