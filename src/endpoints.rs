@@ -532,24 +532,119 @@ pub async fn set_fence(
         (37.4230, -122.0831),  // Point 3
         (37.4220, -122.0831),  // Point 4
     ];
+    
+    let vehicle = data
+        .lock()
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let mission_rx = vehicle.mission_rx_channel.clone();
 
-    for (index, (lat, lng)) in fence_points.iter().enumerate() {
-        let fence_point = mavlink::ardupilotmega::MavMessage::FENCE_POINT(
-            mavlink::ardupilotmega::FENCE_POINT_DATA {
+    // Step 1: Get vehicle's FENCE_ACTION parameter
+    let fence_action_param = mavlink::common::MavMessage::PARAM_REQUEST_READ(
+        mavlink::common::PARAM_REQUEST_READ_DATA {
+            target_system: 1,
+            target_component: 1,
+            param_id: assign_param_id("FENCE_ACTION"),
+            param_index: -1,
+        }
+    );
+    vehicle.send(&mavlink::MavHeader::default(), &mavlink::ardupilotmega::MavMessage::common(fence_action_param))?;
+    
+    let original_fence_action = match mission_rx.lock().unwrap().recv_timeout(TIMEOUT) {
+        Ok(MissionMessage::ParamValue(param)) if param.param_id == assign_param_id("FENCE_ACTION") => param.param_value,
+        _ => return Ok(HttpResponse::InternalServerError().body("Failed to get FENCE_ACTION parameter")),
+    };
+
+    // Step 2: Disable the fence action
+    let disable_fence = mavlink::common::MavMessage::PARAM_SET(
+        mavlink::common::PARAM_SET_DATA {
+            target_system: 1,
+            target_component: 1,
+            param_id: assign_param_id("FENCE_ACTION"),
+            param_value: 0.0,
+            param_type: mavlink::common::MavParamType::MAV_PARAM_TYPE_REAL32,
+        }
+    );
+    vehicle.send(&mavlink::MavHeader::default(), &mavlink::ardupilotmega::MavMessage::common(disable_fence))?;
+
+    // Step 3: Clear the old fence
+    let clear_fence = mavlink::common::MavMessage::PARAM_SET(
+        mavlink::common::PARAM_SET_DATA {
+            target_system: 1,
+            target_component: 1,
+            param_id: assign_param_id("FENCE_ACTION"),
+            param_value: 0.0,
+            param_type: mavlink::common::MavParamType::MAV_PARAM_TYPE_REAL32,
+        }
+    );
+    vehicle.send(&mavlink::MavHeader::default(), &mavlink::ardupilotmega::MavMessage::common(clear_fence))?;
+
+    // Step 4: Set FENCE_TOTAL parameter to the number of fence points
+    let set_fence_total = mavlink::common::MavMessage::PARAM_SET(
+        mavlink::common::PARAM_SET_DATA {
+            target_system: 1,
+            target_component: 1,
+            param_id: assign_param_id("FENCE_ACTION"),
+            param_value: fence_points.len() as f32,
+            param_type: mavlink::common::MavParamType::MAV_PARAM_TYPE_REAL32,
+        }
+    );
+    vehicle.send(&mavlink::MavHeader::default(), &mavlink::ardupilotmega::MavMessage::common(set_fence_total))?;
+
+    // Step 5: Send FENCE_POINT messages for each point
+    for (idx, &(lat, lon)) in fence_points.iter().enumerate() {
+        let fence_point = mavlink::common::MavMessage::COMMAND_LONG(
+            mavlink::common::COMMAND_LONG_DATA {
                 target_system: 1,
                 target_component: 1,
-                idx: index as u8,
-                count: fence_points.len() as u8,
-                lat: *lat,
-                lng: *lng,
+                command: mavlink::common::MavCmd::MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION,
+                confirmation: 0,
+                param1: fence_points.len() as f32,
+                param2: idx as f32,
+                param3: 0.0, // Reserved
+                param4: 0.0, // Reserved
+                param5: lat as f32,
+                param6: lon as f32,
+                param7: 0.0, // Reserved
             }
         );
+        vehicle.send(&mavlink::MavHeader::default(), &mavlink::ardupilotmega::MavMessage::common(fence_point))?;
 
-        data.lock().unwrap().send(&mavlink::MavHeader::default(), &fence_point)?;
+        // Wait for ACK
+        match mission_rx.lock().unwrap().recv_timeout(TIMEOUT) {
+            Ok(MissionMessage::CommandAck(ack)) 
+            if ack.command == mavlink::common::MavCmd::MAV_CMD_NAV_FENCE_POLYGON_VERTEX_INCLUSION => {},
+            _ => return Ok(HttpResponse::InternalServerError().body(format!("Failed to set fence point {}", idx))),
+        }
     }
 
+    // Step 6: Re-enable the fence action
+    let enable_fence = mavlink::common::MavMessage::PARAM_SET(
+        mavlink::common::PARAM_SET_DATA {
+            target_system: 1,
+            target_component: 1,
+            param_id: assign_param_id("FENCE_ACTION"),
+            param_value: original_fence_action,
+            param_type: mavlink::common::MavParamType::MAV_PARAM_TYPE_REAL32,
+        }
+    );
+    vehicle.send(&mavlink::MavHeader::default(), &mavlink::ardupilotmega::MavMessage::common(enable_fence))?;
 
-    ok_response("fence setup".to_string()).await
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "message": "Fence set successfully",
+        "fence_points": fence_points.len()
+    })))
+}
+
+fn assign_param_id(param_name: &str) -> [char; 16] {
+    let mut param_id = ['\0'; 16];
+    for (i, c) in param_name.chars().enumerate() {
+        if i < 16 {
+            param_id[i] = c;
+        } else {
+            break;
+        }
+    }
+    param_id
 }
 
 fn is_connected(data: &web::Data<MAVLinkVehicleArcMutex>) -> bool {
