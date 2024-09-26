@@ -12,6 +12,7 @@ pub enum MissionMessage {
     Request(u16),
     Ack(mavlink::common::MavMissionResult),
     ParamValue(mavlink::common::PARAM_VALUE_DATA),
+    CmdAck(mavlink::common::COMMAND_ACK_DATA),
 }
 
 #[derive(Clone)]
@@ -209,6 +210,14 @@ fn receive_message_loop<
                                 // println!("Got param_value, param_id: {:?}", param_value.param_id);
                                 if let Err(error) = mission_tx.send(MissionMessage::ParamValue(param_value)) {
                                     error!("Failed to send param value: {:#?}", error);
+                                }
+                            }
+                            mavlink::ardupilotmega::MavMessage::common(
+                                mavlink::common::MavMessage::COMMAND_ACK(cmd_ack_data),
+                            ) => {
+                                println!("Got command_ack, data: {:?}", cmd_ack_data);
+                                if let Err(error) = mission_tx.send(MissionMessage::CmdAck(cmd_ack_data)) {
+                                    error!("Failed to send mission ack: {:#?}", error);
                                 }
                             }
                             _ => {
