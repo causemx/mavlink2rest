@@ -5,6 +5,7 @@ use mavlink::Message;
 
 pub type MAVLinkVehicleArcMutex = Arc<Mutex<MAVLinkVehicle<mavlink::ardupilotmega::MavMessage>>>;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum MissionMessage {
     Count(u16),
@@ -20,7 +21,6 @@ pub struct MAVLinkVehicle<M: mavlink::Message> {
     //TODO: Check if Arc<Box can be only Arc or Box
     vehicle: Arc<Box<dyn mavlink::MavConnection<M> + Sync + Send>>,
     header: Arc<Mutex<mavlink::MavHeader>>,
-    pub mission_rx_channel: Arc<Mutex<mpsc::Receiver<MissionMessage>>>,
     last_message_time: Arc<Mutex<Instant>>,
 }
 
@@ -65,12 +65,9 @@ impl<M: mavlink::Message> MAVLinkVehicle<M> {
             sequence: 0,
         };
 
-        let (_mission_tx, mission_rx) = mpsc::channel();
-
         Self {
             vehicle: Arc::new(vehicle),
             header: Arc::new(Mutex::new(header)),
-            mission_rx_channel: Arc::new(Mutex::new(mission_rx)),
             last_message_time: Arc::new(Mutex::new(Instant::now())),
         }
     }
@@ -139,14 +136,6 @@ fn receive_message_loop<
         let mavlink_vehicle = mavlink_vehicle.lock().unwrap();
         mavlink_vehicle.vehicle.clone()
     };
-    
-    let mission_tx = {
-        let mavlink_vehicle = mavlink_vehicle.lock().unwrap();
-        let mission_rx = mavlink_vehicle.mission_rx_channel.clone();
-        let (tx, rx) = mpsc::channel();
-        *mission_rx.lock().unwrap() = rx;
-        tx
-    };
 
     loop {
         match vehicle.recv() {
@@ -176,33 +165,21 @@ fn receive_message_loop<
                                 mavlink::common::MavMessage::MISSION_COUNT(count_data),
                             ) => {
                                 println!("Got mission_count, count: {}", count_data.count);
-                                if let Err(error) = mission_tx.send(MissionMessage::Count(count_data.count)) {
-                                    error!("Failed to send mission count: {:#?}", error);
-                                }
                             }
                             mavlink::ardupilotmega::MavMessage::common(
                                 mavlink::common::MavMessage::MISSION_ITEM_INT(item_data),
                             ) => {
                                 println!("Got mission_item_int, content: {:?}", item_data);
-                                if let Err(error) = mission_tx.send(MissionMessage::Item(item_data)) {
-                                    error!("Failed to send mission item: {:#?}", error);
-                                }
                             }
                             mavlink::ardupilotmega::MavMessage::common(
                                 mavlink::common::MavMessage::MISSION_REQUEST(request_data),
                             ) => {
                                 println!("Got mission_request, seq: {}", request_data.seq);
-                                if let Err(error) = mission_tx.send(MissionMessage::Request(request_data.seq)) {
-                                    error!("Failed to send mission request: {:#?}", error);
-                                }
                             }
                             mavlink::ardupilotmega::MavMessage::common(
                                 mavlink::common::MavMessage::MISSION_ACK(ack_data),
                             ) => {
                                 println!("Got mission_ack, type: {:?}", ack_data.mavtype);
-                                if let Err(error) = mission_tx.send(MissionMessage::Ack(ack_data.mavtype)) {
-                                    error!("Failed to send mission ack: {:#?}", error);
-                                }
                             }
                             mavlink::ardupilotmega::MavMessage::common(
                                 mavlink::common::MavMessage::PARAM_VALUE(param_value)
@@ -216,9 +193,6 @@ fn receive_message_loop<
                                 mavlink::common::MavMessage::COMMAND_ACK(cmd_ack_data),
                             ) => {
                                 println!("Got command_ack, data: {:?}", cmd_ack_data);
-                                if let Err(error) = mission_tx.send(MissionMessage::CmdAck(cmd_ack_data)) {
-                                    error!("Failed to send mission ack: {:#?}", error);
-                                }
                             }
                             _ => {
                                 // println!("Received unhandled message, msg:{}", parsed_message.message_name());
