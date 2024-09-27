@@ -184,10 +184,7 @@ fn receive_message_loop<
                             mavlink::ardupilotmega::MavMessage::common(
                                 mavlink::common::MavMessage::PARAM_VALUE(param_value)
                             ) => {
-                                // println!("Got param_value, param_id: {:?}", param_value.param_id);
-                                if let Err(error) = mission_tx.send(MissionMessage::ParamValue(param_value)) {
-                                    error!("Failed to send param value: {:#?}", error);
-                                }
+                                println!("Got param_value, param_id: {:?}", param_value.param_id);
                             }
                             mavlink::ardupilotmega::MavMessage::common(
                                 mavlink::common::MavMessage::COMMAND_ACK(cmd_ack_data),
