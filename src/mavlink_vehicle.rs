@@ -150,7 +150,8 @@ fn receive_message_loop<
                         *last_message_time = Instant::now();
                     }
                 }
-
+                
+                /* 
                 let message_result = mavlink::common::MavMessage::parse(
                     mavlink::MavlinkVersion::V2,
                     msg.message_id(),
@@ -201,6 +202,7 @@ fn receive_message_loop<
                         // Handle the error case
                     }
                 }
+                */
 
                 if let Err(error) = channel.send((header, msg)) {
                     error!("Failed to send message though channel: {:#?}", error);

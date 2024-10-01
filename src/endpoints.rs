@@ -375,33 +375,18 @@ pub async fn mavlink_post(
     _req: HttpRequest,
     bytes: web::Bytes
 ) -> actix_web::Result<HttpResponse> {
-    if !is_connected(&data) {
-        return ok_response("Please connect to vehicle first.".to_string()).await;
-    }
-
-    /* 
-    validate_auth_token(&req).map_err(|e| {
-        actix_web::error::ErrorUnauthorized(serde_json::json!({
-            "error": e
-        }))
-    })?; */
-
     let json_string = match String::from_utf8(bytes.to_vec()) {
         Ok(content) => content,
         Err(err) => {
-            return not_found_response(
-                format!("Failed to parse input as UTF-8 string: {err:?}")
-            ).await;
+            return not_found_response(format!("Failed to parse input as UTF-8 string: {err:?}"))
+                .await;
         }
     };
 
     debug!("MAVLink post received: {json_string}");
 
-    if
-        let Ok(content) =
-            json5::from_str::<data::MAVLinkMessage<mavlink::ardupilotmega::MavMessage>>(
-                &json_string
-            )
+    if let Ok(content) =
+        json5::from_str::<data::MAVLinkMessage<mavlink::ardupilotmega::MavMessage>>(&json_string)
     {
         match data.lock().unwrap().send(&content.header, &content.message) {
             Ok(_result) => {
@@ -409,11 +394,34 @@ pub async fn mavlink_post(
                 return HttpResponse::Ok().await;
             }
             Err(err) => {
+                return not_found_response(format!("Failed to send message: {err:?}")).await
+            }
+        }
+    }
+
+    if let Ok(content) =
+        json5::from_str::<data::MAVLinkMessage<mavlink::common::MavMessage>>(&json_string)
+    {
+        let content_ardupilotmega = mavlink::ardupilotmega::MavMessage::common(content.message);
+        match data
+            .lock()
+            .unwrap()
+            .send(&content.header, &content_ardupilotmega)
+        {
+            Ok(_result) => {
+                data::update((content.header, content_ardupilotmega));
+                return HttpResponse::Ok().await;
+            }
+            Err(err) => {
                 return not_found_response(format!("Failed to send message: {err:?}")).await;
             }
         }
     }
-    not_found_response(format!("Failed to parsing message")).await
+
+    not_found_response(String::from(
+        "Failed to parse message, not a valid MAVLinkMessage.",
+    ))
+    .await 
 }
 
 #[api_v2_operation]
