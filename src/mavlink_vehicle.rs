@@ -1,27 +1,15 @@
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Instant;
 use log::*;
 use mavlink::Message;
 
 pub type MAVLinkVehicleArcMutex = Arc<Mutex<MAVLinkVehicle<mavlink::ardupilotmega::MavMessage>>>;
-
-#[allow(dead_code)]
-#[derive(Debug)]
-pub enum MissionMessage {
-    Count(u16),
-    Item(mavlink::common::MISSION_ITEM_INT_DATA),
-    Request(u16),
-    Ack(mavlink::common::MavMissionResult),
-    ParamValue(mavlink::common::PARAM_VALUE_DATA),
-    CmdAck(mavlink::common::COMMAND_ACK_DATA),
-}
 
 #[derive(Clone)]
 pub struct MAVLinkVehicle<M: mavlink::Message> {
     //TODO: Check if Arc<Box can be only Arc or Box
     vehicle: Arc<Box<dyn mavlink::MavConnection<M> + Sync + Send>>,
     header: Arc<Mutex<mavlink::MavHeader>>,
-    last_message_time: Arc<Mutex<Instant>>,
+    last_recv_message: Arc<Mutex<Option<mavlink::common::MavMessage>>>,
 }
 
 impl<M: mavlink::Message> MAVLinkVehicle<M> {
@@ -35,8 +23,8 @@ impl<M: mavlink::Message> MAVLinkVehicle<M> {
         }
     }
 
-    pub fn last_received(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Instant>> {
-        self.last_message_time.lock()
+    pub fn last_received(&self) -> Option<mavlink::common::MavMessage> {
+        self.last_recv_message.lock().unwrap().clone()
     }
 }
 
@@ -68,7 +56,7 @@ impl<M: mavlink::Message> MAVLinkVehicle<M> {
         Self {
             vehicle: Arc::new(vehicle),
             header: Arc::new(Mutex::new(header)),
-            last_message_time: Arc::new(Mutex::new(Instant::now())),
+            last_recv_message: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -144,20 +132,23 @@ fn receive_message_loop<
 
                 // println!("msg:{:?}", msg);
 
-                 // Update the last_message_time
-                 if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
-                    if let Ok(mut last_message_time) = mavlink_vehicle.last_message_time.lock() {
-                        *last_message_time = Instant::now();
-                    }
-                }
                 
-                /* 
                 let message_result = mavlink::common::MavMessage::parse(
                     mavlink::MavlinkVersion::V2,
                     msg.message_id(),
                     &msg.ser(),
                 );
 
+                 // Update last_recv_message with the parsed message
+                if let Ok(parsed_message) = message_result {
+                    if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
+                        if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
+                            *last_recv_message = Some(parsed_message);
+                        }
+                    }
+                }
+
+                /* 
                 // Then, handle the Result and match on the message type
                 match message_result {
                     Ok(parsed_message) => {

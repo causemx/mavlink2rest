@@ -319,7 +319,6 @@ pub async fn mission_clear(
     ok_response("mission clear sended".to_string()).await
 }
 
-
 #[api_v2_operation]
 pub async fn set_fence(
     data: web::Data<MAVLinkVehicleArcMutex>,
@@ -351,21 +350,6 @@ pub async fn set_fence(
     ok_response("fence setup".to_string()).await
 }
 
-#[allow(dead_code)]
-fn is_connected(data: &web::Data<MAVLinkVehicleArcMutex>) -> bool {
-    // Attempt to lock the MAVLinkVehicle
-    if let Ok(vehicle) = data.lock() {
-        // Check if we've received any message recently
-        // You might want to adjust the duration based on your requirements
-        if let Ok(last_received) = vehicle.last_received() {
-            return last_received.elapsed() < std::time::Duration::from_secs(5);
-        }
-    }
-    // If we couldn't lock the vehicle or get the last received time, consider it disconnected
-    false
-}
-
-
 
 #[api_v2_operation]
 #[allow(clippy::await_holding_lock)]
@@ -378,39 +362,24 @@ pub async fn mavlink_post(
     let json_string = match String::from_utf8(bytes.to_vec()) {
         Ok(content) => content,
         Err(err) => {
-            return not_found_response(format!("Failed to parse input as UTF-8 string: {err:?}"))
-                .await;
+            return not_found_response(
+                format!("Failed to parse input as UTF-8 string: {err:?}")
+            ).await;
         }
     };
 
     debug!("MAVLink post received: {json_string}");
 
-    if let Ok(content) =
-        json5::from_str::<data::MAVLinkMessage<mavlink::ardupilotmega::MavMessage>>(&json_string)
+    if
+        let Ok(content) =
+            json5::from_str::<data::MAVLinkMessage<mavlink::ardupilotmega::MavMessage>>(
+                &json_string
+            )
     {
         match data.lock().unwrap().send(&content.header, &content.message) {
             Ok(_result) => {
                 data::update((content.header, content.message));
-                return HttpResponse::Ok().await;
-            }
-            Err(err) => {
-                return not_found_response(format!("Failed to send message: {err:?}")).await
-            }
-        }
-    }
-
-    if let Ok(content) =
-        json5::from_str::<data::MAVLinkMessage<mavlink::common::MavMessage>>(&json_string)
-    {
-        let content_ardupilotmega = mavlink::ardupilotmega::MavMessage::common(content.message);
-        match data
-            .lock()
-            .unwrap()
-            .send(&content.header, &content_ardupilotmega)
-        {
-            Ok(_result) => {
-                data::update((content.header, content_ardupilotmega));
-                return HttpResponse::Ok().await;
+                // return HttpResponse::Ok().await;
             }
             Err(err) => {
                 return not_found_response(format!("Failed to send message: {err:?}")).await;
@@ -418,10 +387,30 @@ pub async fn mavlink_post(
         }
     }
 
-    not_found_response(String::from(
-        "Failed to parse message, not a valid MAVLinkMessage.",
-    ))
-    .await 
+    if
+        let Ok(content) = json5::from_str::<data::MAVLinkMessage<mavlink::common::MavMessage>>(
+            &json_string
+        )
+    {
+        let content_ardupilotmega = mavlink::ardupilotmega::MavMessage::common(content.message);
+        match data.lock().unwrap().send(&content.header, &content_ardupilotmega) {
+            Ok(_result) => {
+                data::update((content.header, content_ardupilotmega));
+                //return HttpResponse::Ok().await;
+            }
+            Err(err) => {
+                return not_found_response(format!("Failed to send message: {err:?}")).await;
+            }
+        }
+    }
+
+    for i in 1..100 {
+        let vehicle = data.lock().unwrap();
+        let last_message = vehicle.last_received().map(|msg| format!("{:?}", msg));
+        println!("count: {}, message: {:?}", i, last_message);
+    }
+
+    not_found_response(String::from("Failed to parse message, not a valid MAVLinkMessage.")).await
 }
 
 #[api_v2_operation]
