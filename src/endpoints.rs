@@ -350,7 +350,6 @@ pub async fn set_fence(
     ok_response("fence setup".to_string()).await
 }
 
-
 #[api_v2_operation]
 #[allow(clippy::await_holding_lock)]
 /// Send a MAVLink message for the desired vehicle
@@ -404,10 +403,23 @@ pub async fn mavlink_post(
         }
     }
 
-    for i in 1..100 {
+    /*
+    let start = Instant::now();
+    let end = Duration::from_secs(3);
+    let mut rece_msg = Vec::new();
+
+    while start.elapsed() < end {
         let vehicle = data.lock().unwrap();
-        let last_message = vehicle.last_received().map(|msg| format!("{:?}", msg));
-        println!("count: {}, message: {:?}", i, last_message);
+        if let Some(msg) = vehicle.last_received() {
+            if !rece_msg.contains(&msg) {
+                rece_msg.push(msg.clone());
+                println!("New message received: {:?}", msg);
+            }
+        }
+    }*/
+
+    if let Some(ack) = data.lock().unwrap().last_received() {
+        println!("ACK: {:?}", ack);
     }
 
     not_found_response(String::from("Failed to parse message, not a valid MAVLinkMessage.")).await

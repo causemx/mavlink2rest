@@ -1,4 +1,4 @@
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{ mpsc, Arc, Mutex };
 use log::*;
 use mavlink::Message;
 
@@ -43,7 +43,7 @@ impl<M: mavlink::Message> MAVLinkVehicle<M> {
         mavlink_connection_string: &str,
         version: mavlink::MavlinkVersion,
         system_id: u8,
-        component_id: u8,
+        component_id: u8
     ) -> Self {
         let mut vehicle = mavlink::connect(mavlink_connection_string).unwrap();
         vehicle.set_protocol_version(version);
@@ -62,19 +62,20 @@ impl<M: mavlink::Message> MAVLinkVehicle<M> {
 }
 
 impl<
-        M: 'static + mavlink::Message + std::fmt::Debug + From<mavlink::common::MavMessage> + Send,
-    > MAVLinkVehicleHandle<M>
-{
+    M: 'static + mavlink::Message + std::fmt::Debug + From<mavlink::common::MavMessage> + Send
+> MAVLinkVehicleHandle<M> {
     pub fn new(
         connection_string: &str,
         version: mavlink::MavlinkVersion,
         system_id: u8,
         component_id: u8,
-        send_initial_heartbeats: bool,
+        send_initial_heartbeats: bool
     ) -> Self {
-        let mavlink_vehicle: Arc<Mutex<MAVLinkVehicle<M>>> = Arc::new(Mutex::new(
-            MAVLinkVehicle::<M>::new(connection_string, version, system_id, component_id),
-        ));
+        let mavlink_vehicle: Arc<Mutex<MAVLinkVehicle<M>>> = Arc::new(
+            Mutex::new(
+                MAVLinkVehicle::<M>::new(connection_string, version, system_id, component_id)
+            )
+        );
 
         // PX4 requires a initial heartbeat to be sent to wake up the connection, otherwise it will
         // not send any messages
@@ -99,21 +100,16 @@ impl<
             mavlink_vehicle,
             heartbeat_thread: std::thread::spawn(move || heartbeat_loop(heartbeat_mavlink_vehicle)),
             receive_message_thread: std::thread::spawn(move || {
-                receive_message_loop(
-                    receive_message_mavlink_vehicle,
-                    tx_channel,
-                );
+                receive_message_loop(receive_message_mavlink_vehicle, tx_channel);
             }),
             thread_rx_channel: rx_channel,
         }
     }
 }
 
-fn receive_message_loop<
-    M: mavlink::Message + std::fmt::Debug + From<mavlink::common::MavMessage>,
->(
+fn receive_message_loop<M: mavlink::Message + std::fmt::Debug + From<mavlink::common::MavMessage>>(
     mavlink_vehicle: Arc<Mutex<MAVLinkVehicle<M>>>,
-    channel: std::sync::mpsc::Sender<(mavlink::MavHeader, M)>,
+    channel: std::sync::mpsc::Sender<(mavlink::MavHeader, M)>
 ) {
     // let mavlink_vehicle = mavlink_vehicle.as_ref().lock().unwrap();
     // let vehicle = mavlink_vehicle.vehicle.clone();
@@ -132,18 +128,30 @@ fn receive_message_loop<
 
                 // println!("msg:{:?}", msg);
 
-                
                 let message_result = mavlink::common::MavMessage::parse(
                     mavlink::MavlinkVersion::V2,
                     msg.message_id(),
-                    &msg.ser(),
+                    &msg.ser()
                 );
 
-                 // Update last_recv_message with the parsed message
+                // Update last_recv_message with the parsed message
                 if let Ok(parsed_message) = message_result {
-                    if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
-                        if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
-                            *last_recv_message = Some(parsed_message);
+                    
+                    match mavlink::ardupilotmega::MavMessage::common(parsed_message.clone()) {
+                        mavlink::ardupilotmega::MavMessage::common(
+                            mavlink::common::MavMessage::COMMAND_ACK(cmd_ack_data)
+                        ) => {
+                            // Update last_recv_message
+                            if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
+                                if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
+                                    *last_recv_message = Some(parsed_message);
+                                }
+                            }
+                            println!("Got command_ack, data: {:?}", cmd_ack_data);
+                        }
+                        _ => {
+                            // Handle other message types if needed
+                            // println!("Received unhandled message, msg:{}", parsed_message.message_name());
                         }
                     }
                 }
@@ -205,7 +213,7 @@ fn receive_message_loop<
                     if error.kind() == std::io::ErrorKind::UnexpectedEof {
                         // We're probably running a file, time to exit!
                         std::process::exit(0);
-                    };
+                    }
                 }
             }
         }
@@ -213,7 +221,7 @@ fn receive_message_loop<
 }
 
 fn send_heartbeat<M: mavlink::Message + From<mavlink::common::MavMessage>>(
-    mavlink_vehicle: Arc<Mutex<MAVLinkVehicle<M>>>,
+    mavlink_vehicle: Arc<Mutex<MAVLinkVehicle<M>>>
 ) {
     let mavlink_vehicle = mavlink_vehicle.as_ref().lock().unwrap();
     let vehicle = mavlink_vehicle.vehicle.clone();
@@ -225,7 +233,7 @@ fn send_heartbeat<M: mavlink::Message + From<mavlink::common::MavMessage>>(
 }
 
 fn heartbeat_loop<M: mavlink::Message + From<mavlink::common::MavMessage>>(
-    mavlink_vehicle: Arc<Mutex<MAVLinkVehicle<M>>>,
+    mavlink_vehicle: Arc<Mutex<MAVLinkVehicle<M>>>
 ) {
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
