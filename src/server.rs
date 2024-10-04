@@ -28,7 +28,7 @@ fn add_v1_paths(scope: Scope) -> Scope {
         .route("/mavlink", web::get().to(endpoints::mavlink))
         .route("/mavlink", web::post().to(endpoints::mavlink_post))
         //.route("/mission_clear", web::post().to(endpoints::mission_clear))
-        //.route("/mission_post", web::post().to(endpoints::mission_post))
+        .route("/mission_post", web::post().to(endpoints::mission_post))
         //.route("/mission_get", web::post().to(endpoints::mission_get)) 
         .route("/flyto", web::post().to(endpoints::fly_to))
         .route("/set_fence", web::post().to(endpoints::set_fence))
