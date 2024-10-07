@@ -82,6 +82,10 @@ struct TargetLocation {
 
 #[derive(Deserialize)]
 struct MissionItem {
+    p1: f32,
+    p2: f32,
+    p3: f32,
+    p4: f32,
     lat: f64,
     lon: f64,
     alt: f32,
@@ -595,9 +599,15 @@ pub async fn mission_post(
                             request.seq,
                             mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
                             mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
-                            0, 0, 0.0
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0,
+                            0,
+                            0.0
                         )
-                                            } else {
+                    } else {
                         // Target locations
                         let index = (request.seq as usize) - 1;
                         let item = &mission_items[index];
@@ -618,6 +628,10 @@ pub async fn mission_post(
                             request.seq,
                             mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
                             mav_cmd,
+                            item.p1,
+                            item.p2,
+                            item.p3,
+                            item.p4,
                             (item.lat * 1e7) as i32,
                             (item.lon * 1e7) as i32,
                             item.alt
@@ -684,17 +698,29 @@ fn create_mission_item_int(
     seq: u16,
     frame: mavlink::common::MavFrame,
     command: mavlink::common::MavCmd,
+    p1: f32,
+    p2: f32,
+    p3: f32,
+    p4: f32,
     x: i32,
     y: i32,
     z: f32
 ) -> mavlink::common::MavMessage {
     mavlink::common::MavMessage::MISSION_ITEM_INT(mavlink::common::MISSION_ITEM_INT_DATA {
-        target_system: 1, target_component: 1,
-        seq, frame, command,
-        current: 0, autocontinue: 0,
-        param1: 0.0, param2: 0.0, 
-        param3: 0.0, param4: 0.0,
-        x, y, z,
+        target_system: 1,
+        target_component: 1,
+        seq,
+        frame,
+        command,
+        current: 0,
+        autocontinue: 0,
+        param1: p1,
+        param2: p2,
+        param3: p3,
+        param4: p4,
+        x,
+        y,
+        z,
         mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
     })
 }
