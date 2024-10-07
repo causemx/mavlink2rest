@@ -498,58 +498,38 @@ pub async fn mission_post(
                     let message = if request.seq == 0 {
                         // Home location (0th mission item)
                         info!("Sending home location (sequence 0)");
-                        mavlink::common::MavMessage::MISSION_ITEM_INT(
-                            mavlink::common::MISSION_ITEM_INT_DATA {
-                                target_system: 1,
-                                target_component: 1,
-                                seq: request.seq,
-                                frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-                                command: mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
-                                current: 0,
-                                autocontinue: 0,
-                                param1: 0.0,
-                                param2: 0.0,
-                                param3: 0.0,
-                                param4: 0.0,
-                                x: 0,
-                                y: 0,
-                                z: 0.0,
-                                mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
-                            }
+                        create_mission_item_int(
+                            request.seq,
+                            mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                            mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
+                            0, 0, 0.0
                         )
-                    } else {
+                                            } else {
                         // Target locations
                         let index = (request.seq as usize) - 1;
                         let item = &mission_items[index];
                         info!("Sending waypoint {} (sequence {})", index + 1, request.seq);
 
                         // Convert u16 to MavCmd
-                        let mav_cmd = mavlink::common::MavCmd::from_u16(item.command).unwrap_or_else(|| {
-                            warn!("Invalid command value: {}. Using MAV_CMD_NAV_WAYPOINT as default.", item.command);
-                            mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT
-                        });
+                        let mav_cmd = mavlink::common::MavCmd
+                            ::from_u16(item.command)
+                            .unwrap_or_else(|| {
+                                warn!(
+                                    "Invalid command value: {}. Using MAV_CMD_NAV_WAYPOINT as default.",
+                                    item.command
+                                );
+                                mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT
+                            });
 
-                        mavlink::common::MavMessage::MISSION_ITEM_INT(
-                            mavlink::common::MISSION_ITEM_INT_DATA {
-                                target_system: 1,
-                                target_component: 1,
-                                seq: request.seq,
-                                frame: mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
-                                command: mav_cmd,
-                                current: 0,
-                                autocontinue: 0,
-                                param1: 0.0,
-                                param2: 0.0,
-                                param3: 0.0,
-                                param4: 0.0,
-                                x: (item.lat * 1e7) as i32,
-                                y: (item.lon * 1e7) as i32,
-                                z: item.alt,
-                                mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
-                            }
+                        create_mission_item_int(
+                            request.seq,
+                            mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
+                            mav_cmd,
+                            (item.lat * 1e7) as i32,
+                            (item.lon * 1e7) as i32,
+                            item.alt
                         )
                     };
-
                     {
                         let vehicle = data.lock().unwrap();
                         vehicle
@@ -605,6 +585,25 @@ pub async fn mission_post(
             "Mission upload incomplete: did not receive final acknowledgement"
         )
     )
+}
+
+fn create_mission_item_int(
+    seq: u16,
+    frame: mavlink::common::MavFrame,
+    command: mavlink::common::MavCmd,
+    x: i32,
+    y: i32,
+    z: f32
+) -> mavlink::common::MavMessage {
+    mavlink::common::MavMessage::MISSION_ITEM_INT(mavlink::common::MISSION_ITEM_INT_DATA {
+        target_system: 1, target_component: 1,
+        seq, frame, command,
+        current: 0, autocontinue: 0,
+        param1: 0.0, param2: 0.0, 
+        param3: 0.0, param4: 0.0,
+        x, y, z,
+        mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+    })
 }
 
 #[api_v2_operation]
