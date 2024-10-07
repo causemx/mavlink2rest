@@ -124,44 +124,46 @@ fn receive_message_loop<M: mavlink::Message + std::fmt::Debug + From<mavlink::co
     loop {
         match vehicle.recv() {
             Ok((header, msg)) => {
-                // println!("id:{}, name:{}, msg: {:?}", msg.message_id(), msg.message_name(), msg);
-
-                // println!("msg:{:?}", msg);
-
-                let message_result = mavlink::common::MavMessage::parse(
-                    mavlink::MavlinkVersion::V2,
-                    msg.message_id(),
-                    &msg.ser()
-                );
 
                 // Update last_recv_message with the parsed message
-                if let Ok(parsed_message) = message_result {
+                if let Ok(parsed_message) = mavlink::common::MavMessage::parse(
+                    mavlink::MavlinkVersion::V2, 
+                    msg.message_id(), 
+                    &msg.ser()) {
                     
                     match mavlink::ardupilotmega::MavMessage::common(parsed_message.clone()) {
                         mavlink::ardupilotmega::MavMessage::common(
-                            mavlink::common::MavMessage::COMMAND_ACK(_cmd_ack_data)
+                            mavlink::common::MavMessage::COMMAND_ACK(cmd_ack_data)
                         ) => {
-                            // Update last_recv_message
                             if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
                                 if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
                                     *last_recv_message = Some(parsed_message);
                                 }
                             }
-                            // println!("Got command_ack, data: {:?}", cmd_ack_data);
+                            debug!("Got command_ack, data: {:?}", cmd_ack_data);
                         }
                         mavlink::ardupilotmega::MavMessage::common(
-                            mavlink::common::MavMessage::MISSION_REQUEST(_mission_request_data)
+                            mavlink::common::MavMessage::MISSION_REQUEST(mission_request_data)
                         ) => {
-                            // Update last_recv_message
                             if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
                                 if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
                                     *last_recv_message = Some(parsed_message);
                                 }
                             }
-                            // println!("Got mission_request, data: {:?}", mission_request_data);
+                            debug!("Got mission_request, data: {:?}", mission_request_data);
                         }
                         mavlink::ardupilotmega::MavMessage::common(
-                            mavlink::common::MavMessage::MISSION_ACK(_mission_ack_data)
+                            mavlink::common::MavMessage::MISSION_ACK(mission_ack_data)
+                        ) => {
+                            if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
+                                if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
+                                    *last_recv_message = Some(parsed_message);
+                                }
+                            }
+                            debug!("Got mission_ack, data: {:?}", mission_ack_data);
+                        }
+                        mavlink::ardupilotmega::MavMessage::common(
+                            mavlink::common::MavMessage::MISSION_COUNT(mission_count_data)
                         ) => {
                             // Update last_recv_message
                             if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
@@ -169,61 +171,26 @@ fn receive_message_loop<M: mavlink::Message + std::fmt::Debug + From<mavlink::co
                                     *last_recv_message = Some(parsed_message);
                                 }
                             }
-                            // println!("Got mission_ack, data: {:?}", mission_ack_data);
+                            debug!("Got mission_ack, data: {:?}", mission_count_data);
+                        }
+                        mavlink::ardupilotmega::MavMessage::common(
+                            mavlink::common::MavMessage::MISSION_ITEM_INT(mission_item_data)
+                        ) => {
+                            // Update last_recv_message
+                            if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
+                                if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
+                                    *last_recv_message = Some(parsed_message);
+                                }
+                            }
+                            debug!("Got mission_ack, data: {:?}",mission_item_data);
                         }
                         _ => {
                             // Handle other message types if needed
-                            // println!("Received unhandled message, msg:{}", parsed_message.message_name());
+                            trace!("Received unhandled message, msg:{}", parsed_message.message_name());
                         }
                     }
                 }
 
-                /* 
-                // Then, handle the Result and match on the message type
-                match message_result {
-                    Ok(parsed_message) => {
-                        match mavlink::ardupilotmega::MavMessage::common(parsed_message.clone()) {
-                            mavlink::ardupilotmega::MavMessage::common(
-                                mavlink::common::MavMessage::MISSION_COUNT(count_data),
-                            ) => {
-                                println!("Got mission_count, count: {}", count_data.count);
-                            }
-                            mavlink::ardupilotmega::MavMessage::common(
-                                mavlink::common::MavMessage::MISSION_ITEM_INT(item_data),
-                            ) => {
-                                println!("Got mission_item_int, content: {:?}", item_data);
-                            }
-                            mavlink::ardupilotmega::MavMessage::common(
-                                mavlink::common::MavMessage::MISSION_REQUEST(request_data),
-                            ) => {
-                                println!("Got mission_request, seq: {}", request_data.seq);
-                            }
-                            mavlink::ardupilotmega::MavMessage::common(
-                                mavlink::common::MavMessage::MISSION_ACK(ack_data),
-                            ) => {
-                                println!("Got mission_ack, type: {:?}", ack_data.mavtype);
-                            }
-                            mavlink::ardupilotmega::MavMessage::common(
-                                mavlink::common::MavMessage::PARAM_VALUE(param_value)
-                            ) => {
-                                println!("Got param_value, param_id: {:?}", param_value.param_id);
-                            }
-                            mavlink::ardupilotmega::MavMessage::common(
-                                mavlink::common::MavMessage::COMMAND_ACK(cmd_ack_data),
-                            ) => {
-                                println!("Got command_ack, data: {:?}", cmd_ack_data);
-                            }
-                            _ => {
-                                // println!("Received unhandled message, msg:{}", parsed_message.message_name());
-                            }
-                        }
-                    }
-                    Err(_err) => {
-                        // error!("Failed to parse MAVLink message: {:?}", err);
-                        // Handle the error case
-                    }
-                }
-                */
 
                 if let Err(error) = channel.send((header, msg)) {
                     error!("Failed to send message though channel: {:#?}", error);

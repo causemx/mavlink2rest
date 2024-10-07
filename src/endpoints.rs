@@ -436,6 +436,99 @@ pub async fn mavlink_post(
 }
 
 #[api_v2_operation]
+pub async fn mission_get(
+    data: web::Data<MAVLinkVehicleArcMutex>,
+    _req: HttpRequest,
+) -> actix_web::Result<HttpResponse> {
+    let mission_request_list_data = mavlink::common::MISSION_REQUEST_LIST_DATA {
+        target_component: 1,
+        target_system: 1,
+        mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+    };
+
+    let mission_request_list = mavlink::ardupilotmega::MavMessage::common(
+        mavlink::common::MavMessage::MISSION_REQUEST_LIST(mission_request_list_data),
+    );
+    {
+        let mavlink_vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
+        mavlink_vehicle.send(&mavlink::MavHeader::default(), &mission_request_list).map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to send mission request list: {}", e)))?;
+    }
+
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(5);
+    let mut mission_count = 0;
+    while start.elapsed() < timeout {
+        let last_message = {
+            let vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
+            vehicle.last_received()
+        };
+        if let Some(mavlink::common::MavMessage::MISSION_COUNT(count_data)) = last_message {
+            mission_count = count_data.count;
+            break;
+        };
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    if mission_count == 0 {
+        return not_found_response("Failed to receive mission count".to_string()).await;
+    }
+
+    let mut mission_items: Vec<mavlink::common::MISSION_ITEM_INT_DATA> = Vec::new();
+
+    // Request and collect mission items
+    for i in 0..mission_count {
+        let mission_request_int_data = mavlink::common::MISSION_REQUEST_INT_DATA {
+            seq: i,
+            target_component: 1,
+            target_system: 1,
+            mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
+        };
+
+        let mission_request_int = mavlink::ardupilotmega::MavMessage::common(
+            mavlink::common::MavMessage::MISSION_REQUEST_INT(mission_request_int_data),
+        );
+
+        // Send mission item request
+        {
+            let vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
+            vehicle.send(&mavlink::MavHeader::default(), &mission_request_int)
+                .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to send mission item request: {}", e)))?;
+        }
+
+        // Wait for mission item
+        let start_time = std::time::Instant::now();
+        while start_time.elapsed() < timeout {
+            let last_message = {
+                let vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
+                vehicle.last_received()
+            };
+
+            if let Some(mavlink::common::MavMessage::MISSION_ITEM_INT(item_data)) = last_message {
+                if item_data.seq == i {
+                    mission_items.push(item_data);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        if mission_items.len() != (i as usize + 1) {
+            return not_found_response(format!("Failed to receive mission item {}", i)).await;
+        }
+    }
+
+    let mission_data = serde_json::json!({
+        "count": mission_count,
+        "items": mission_items,
+    });
+
+    ok_response(serde_json::to_string(&mission_data)
+        .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to serialize mission data: {}", e)))?)
+    .await
+}
+
+
+#[api_v2_operation]
 pub async fn mission_post(
     data: web::Data<MAVLinkVehicleArcMutex>, // Changed to tokio::sync::Mutex
     _req: HttpRequest,
