@@ -26,47 +26,41 @@ pub fn is_verbose() -> bool {
     return MANAGER.as_ref().clap_matches.is_present("verbose");
 }
 
-pub fn mavlink_connection_string() -> &'static str {
-    return MANAGER.as_ref().clap_matches.value_of("connect").unwrap();
+pub fn mavlink_connection_string() -> Vec<String> {
+    MANAGER.as_ref()
+        .clap_matches.values_of("connect")
+        .map(|values| values.map(String::from).collect())
+        .unwrap()
 }
 
-pub fn server_address() -> &'static str {
-    return MANAGER.as_ref().clap_matches.value_of("server").unwrap();
+pub fn server_address() -> Vec<String> {
+    MANAGER.as_ref()
+        .clap_matches.values_of("server")
+        .map(|values| values.map(String::from).collect())
+        .unwrap()
 }
 
 pub fn default_api_version() -> u8 {
-    return MANAGER
-        .as_ref()
-        .clap_matches
-        .value_of("default-api-version")
+    return MANAGER.as_ref()
+        .clap_matches.value_of("default-api-version")
         .unwrap()
         .parse::<u8>()
         .unwrap();
 }
 
 pub fn mavlink_version() -> u8 {
-    return MANAGER
-        .as_ref()
-        .clap_matches
-        .value_of("mavlink")
-        .unwrap()
-        .parse::<u8>()
-        .unwrap();
+    return MANAGER.as_ref().clap_matches.value_of("mavlink").unwrap().parse::<u8>().unwrap();
 }
 
 pub fn mavlink_system_and_component_id() -> (u8, u8) {
-    let system_id = MANAGER
-        .as_ref()
-        .clap_matches
-        .value_of("system_id")
+    let system_id = MANAGER.as_ref()
+        .clap_matches.value_of("system_id")
         .unwrap()
         .parse::<u8>()
         .expect("System ID should be a value between 1-255.");
 
-    let component_id = MANAGER
-        .as_ref()
-        .clap_matches
-        .value_of("component_id")
+    let component_id = MANAGER.as_ref()
+        .clap_matches.value_of("component_id")
         .unwrap()
         .parse::<u8>()
         .expect("Component ID should be a value between 1-255.");
@@ -75,88 +69,98 @@ pub fn mavlink_system_and_component_id() -> (u8, u8) {
 }
 
 pub fn mavlink_send_initial_heartbeats() -> bool {
-    return MANAGER
-        .as_ref()
-        .clap_matches
-        .is_present("send-initial-heartbeats");
+    return MANAGER.as_ref().clap_matches.is_present("send-initial-heartbeats");
 }
 
 //TODO: Move to the top
 fn get_clap_matches<'a>() -> clap::ArgMatches<'a> {
-    let version = format!(
-        "{} ({})",
-        env!("VERGEN_GIT_SEMVER"),
-        env!("VERGEN_BUILD_TIMESTAMP")
-    );
+    let version = format!("{} ({})", env!("VERGEN_GIT_SEMVER"), env!("VERGEN_BUILD_TIMESTAMP"));
 
-    let matches = clap::App::new(env!("CARGO_PKG_NAME"))
+    let matches = clap::App
+        ::new(env!("CARGO_PKG_NAME"))
         .version(version.as_str())
         .about("MAVLink to REST API!")
         .author(env!("CARGO_PKG_AUTHORS"))
         .arg(
-            clap::Arg::with_name("connect")
+            clap::Arg
+                ::with_name("connect")
                 .short("c")
                 .long("connect")
                 .value_name("TYPE:<IP/SERIAL>:<PORT/BAUDRATE>")
                 .help("Sets the mavlink connection string")
                 .takes_value(true)
-                .default_value("udpin:127.0.0.1:14550"),
+                .multiple(true)
+                .default_value("udpin:127.0.0.1:14550")
         )
         .arg(
-            clap::Arg::with_name("server")
+            clap::Arg
+                ::with_name("server")
                 .short("s")
                 .long("server")
                 .value_name("IP:PORT")
                 .help("Sets the IP and port that the rest server will be provided")
                 .takes_value(true)
-                .default_value("0.0.0.0:5566"),
+                .multiple(true)
+                .default_value("0.0.0.0:5566")
         )
         .arg(
-            clap::Arg::with_name("mavlink")
+            clap::Arg
+                ::with_name("mavlink")
                 .long("mavlink")
                 .value_name("VERSION")
                 .help("Sets the mavlink version used to communicate")
                 .takes_value(true)
                 .possible_values(&["1", "2"])
-                .default_value("2"),
+                .default_value("2")
         )
         .arg(
-            clap::Arg::with_name("system_id")
+            clap::Arg
+                ::with_name("system_id")
                 .long("system-id")
                 .value_name("SYSTEM_ID")
                 .help("Sets system ID for this service.")
                 .takes_value(true)
-                .default_value("255"),
+                .default_value("255")
         )
         .arg(
-            clap::Arg::with_name("component_id")
+            clap::Arg
+                ::with_name("component_id")
                 .long("component-id")
                 .value_name("COMPONENT_ID")
-                .help("Sets the component ID for this service, for more information, check: https://mavlink.io/en/messages/common.html#MAV_COMPONENT")
+                .help(
+                    "Sets the component ID for this service, for more information, check: https://mavlink.io/en/messages/common.html#MAV_COMPONENT"
+                )
                 .takes_value(true)
-                .default_value("0"),
+                .default_value("0")
         )
         .arg(
-            clap::Arg::with_name("default-api-version")
+            clap::Arg
+                ::with_name("default-api-version")
                 .long("default-api-version")
                 .value_name("DEFAULT_API_VERSION")
-                .help("Sets the default version used by the REST API, this will remove the prefix used by its path.")
+                .help(
+                    "Sets the default version used by the REST API, this will remove the prefix used by its path."
+                )
                 .takes_value(true)
                 .possible_values(&["1"])
-                .default_value("1"),
+                .default_value("1")
         )
         .arg(
-            clap::Arg::with_name("verbose")
+            clap::Arg
+                ::with_name("verbose")
                 .short("v")
                 .long("verbose")
                 .help("Be verbose")
-                .takes_value(false),
+                .takes_value(false)
         )
         .arg(
-            clap::Arg::with_name("send-initial-heartbeats")
+            clap::Arg
+                ::with_name("send-initial-heartbeats")
                 .long("send-initial-heartbeats")
-                .help("Send a burst of initial heartbeats to the autopilot spaced by 0.1 seconds to wake up MAVLink connection (useful for PX4-like autopilots).")
-                .takes_value(false),
+                .help(
+                    "Send a burst of initial heartbeats to the autopilot spaced by 0.1 seconds to wake up MAVLink connection (useful for PX4-like autopilots)."
+                )
+                .takes_value(false)
         );
 
     return matches.get_matches();
