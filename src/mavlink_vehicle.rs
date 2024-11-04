@@ -2,6 +2,7 @@ use std::sync::{ mpsc, Arc, Mutex };
 use log::*;
 use mavlink::Message;
 
+type AckCallback = Box<dyn FnMut(mavlink::common::MavMessage) + Send>;
 pub type MAVLinkVehicleArcMutex = Arc<Mutex<MAVLinkVehicle<mavlink::ardupilotmega::MavMessage>>>;
 
 #[derive(Clone)]
@@ -9,7 +10,7 @@ pub struct MAVLinkVehicle<M: mavlink::Message> {
     //TODO: Check if Arc<Box can be only Arc or Box
     vehicle: Arc<Box<dyn mavlink::MavConnection<M> + Sync + Send>>,
     header: Arc<Mutex<mavlink::MavHeader>>,
-    last_recv_message: Arc<Mutex<Option<mavlink::common::MavMessage>>>,
+    ack_callback: Arc<Mutex<Option<AckCallback>>>,
 }
 
 impl<M: mavlink::Message> MAVLinkVehicle<M> {
@@ -23,8 +24,19 @@ impl<M: mavlink::Message> MAVLinkVehicle<M> {
         }
     }
 
-    pub fn last_received(&self) -> Option<mavlink::common::MavMessage> {
-        self.last_recv_message.lock().unwrap().clone()
+    pub fn set_ack_callback<F>(&self, callback: F)
+    where
+        F: FnMut(mavlink::common::MavMessage) + Send + 'static,
+    {
+        if let Ok(mut ack_callback) = self.ack_callback.lock() {
+            *ack_callback = Some(Box::new(callback));
+        }
+    }
+
+    pub fn clear_ack_callback(&self) {
+        if let Ok(mut ack_callback) = self.ack_callback.lock() {
+            *ack_callback = None;
+        }
     }
 }
 
@@ -56,7 +68,7 @@ impl<M: mavlink::Message> MAVLinkVehicle<M> {
         Self {
             vehicle: Arc::new(vehicle),
             header: Arc::new(Mutex::new(header)),
-            last_recv_message: Arc::new(Mutex::new(None)),
+            ack_callback: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -111,96 +123,59 @@ fn receive_message_loop<M: mavlink::Message + std::fmt::Debug + From<mavlink::co
     mavlink_vehicle: Arc<Mutex<MAVLinkVehicle<M>>>,
     channel: std::sync::mpsc::Sender<(mavlink::MavHeader, M)>
 ) {
-    // let mavlink_vehicle = mavlink_vehicle.as_ref().lock().unwrap();
-    // let vehicle = mavlink_vehicle.vehicle.clone();
-    // drop(mavlink_vehicle);
-    // let vehicle = vehicle.as_ref();
-
     let vehicle = {
         let mavlink_vehicle = mavlink_vehicle.lock().unwrap();
         mavlink_vehicle.vehicle.clone()
     };
 
+    let ack_callback = {
+        let mavlink_vehicle = mavlink_vehicle.lock().unwrap();
+        mavlink_vehicle.ack_callback.clone()
+    };
+
     loop {
         match vehicle.recv() {
             Ok((header, msg)) => {
-
-                // Update last_recv_message with the parsed message
                 if let Ok(parsed_message) = mavlink::common::MavMessage::parse(
                     mavlink::MavlinkVersion::V2, 
                     msg.message_id(), 
-                    &msg.ser()) {
-                    
+                    &msg.ser()
+                ) {
                     match mavlink::ardupilotmega::MavMessage::common(parsed_message.clone()) {
-                        mavlink::ardupilotmega::MavMessage::common(
-                            mavlink::common::MavMessage::COMMAND_ACK(cmd_ack_data)
-                        ) => {
-                            if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
-                                if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
-                                    *last_recv_message = Some(parsed_message);
+                        mavlink::ardupilotmega::MavMessage::common(message) => {
+                            match message {
+                                mavlink::common::MavMessage::COMMAND_ACK(_) |
+                                mavlink::common::MavMessage::MISSION_ACK(_) |
+                                mavlink::common::MavMessage::MISSION_REQUEST(_) |
+                                mavlink::common::MavMessage::MISSION_COUNT(_) |
+                                mavlink::common::MavMessage::MISSION_ITEM_INT(_) => {
+                                    // Call the callback if one is set
+                                    if let Ok(mut ack_callback) = ack_callback.lock() {
+                                        if let Some(callback) = ack_callback.as_mut() {
+                                            callback(message.clone());
+                                        }
+                                    }
+                                    info!("Received acknowledgment message: {:?}", message);
+                                }
+                                _ => {
+                                    trace!("Received unhandled message type: {}", message.message_name());
                                 }
                             }
-                            debug!("Got command_ack, data: {:?}", cmd_ack_data);
-                        }
-                        mavlink::ardupilotmega::MavMessage::common(
-                            mavlink::common::MavMessage::MISSION_REQUEST(mission_request_data)
-                        ) => {
-                            if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
-                                if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
-                                    *last_recv_message = Some(parsed_message);
-                                }
-                            }
-                            debug!("Got mission_request, data: {:?}", mission_request_data);
-                        }
-                        mavlink::ardupilotmega::MavMessage::common(
-                            mavlink::common::MavMessage::MISSION_ACK(mission_ack_data)
-                        ) => {
-                            if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
-                                if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
-                                    *last_recv_message = Some(parsed_message);
-                                }
-                            }
-                            debug!("Got mission_ack, data: {:?}", mission_ack_data);
-                        }
-                        mavlink::ardupilotmega::MavMessage::common(
-                            mavlink::common::MavMessage::MISSION_COUNT(mission_count_data)
-                        ) => {
-                            // Update last_recv_message
-                            if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
-                                if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
-                                    *last_recv_message = Some(parsed_message);
-                                }
-                            }
-                            debug!("Got mission_ack, data: {:?}", mission_count_data);
-                        }
-                        mavlink::ardupilotmega::MavMessage::common(
-                            mavlink::common::MavMessage::MISSION_ITEM_INT(mission_item_data)
-                        ) => {
-                            // Update last_recv_message
-                            if let Ok(mavlink_vehicle) = mavlink_vehicle.lock() {
-                                if let Ok(mut last_recv_message) = mavlink_vehicle.last_recv_message.lock() {
-                                    *last_recv_message = Some(parsed_message);
-                                }
-                            }
-                            debug!("Got mission_ack, data: {:?}",mission_item_data);
                         }
                         _ => {
-                            // Handle other message types if needed
-                            trace!("Received unhandled message, msg:{}", parsed_message.message_name());
+                            trace!("Received uncoverd message type");
                         }
                     }
                 }
 
-
                 if let Err(error) = channel.send((header, msg)) {
-                    error!("Failed to send message though channel: {:#?}", error);
+                    error!("Failed to send message through channel: {:#?}", error);
                 }
             }
             Err(error) => {
                 error!("Recv error: {:?}", error);
                 if let mavlink::error::MessageReadError::Io(error) = error {
                     if error.kind() == std::io::ErrorKind::UnexpectedEof {
-                        // We're probably running a file, time to exit!
                         std::process::exit(0);
                     }
                 }

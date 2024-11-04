@@ -14,6 +14,7 @@ use super::websocket_manager::WebsocketActor;
 use log::*;
 use mavlink::{ common::PositionTargetTypemask, Message };
 use std::time::Duration;
+use std::sync::{Arc, Mutex};
 use num_traits::FromPrimitive;
 
 #[allow(dead_code)]
@@ -383,61 +384,93 @@ pub async fn mavlink_post(
 
     debug!("MAVLink post received: {json_string}");
 
-    if
-        let Ok(content) =
-            json5::from_str::<data::MAVLinkMessage<mavlink::ardupilotmega::MavMessage>>(
-                &json_string
-            )
-    {
+     // Create a flag for acknowledgment received
+     let ack_received = Arc::new(Mutex::new(None));
+     let ack_received_clone = ack_received.clone();
+ 
+     // Set up the ack callback before sending the message
+     {
+         let vehicle = data.lock().unwrap();
+         vehicle.set_ack_callback(move |msg| {
+             if let Ok(mut ack) = ack_received_clone.lock() {
+                 *ack = Some(msg);
+             }
+         });
+     }
+
+       // Flag to track if we sent any message successfully
+    let mut message_sent = false;
+
+    // Try parsing as ardupilotmega message first
+    if let Ok(content) = json5::from_str::<data::MAVLinkMessage<mavlink::ardupilotmega::MavMessage>>(&json_string) {
         match data.lock().unwrap().send(&content.header, &content.message) {
             Ok(_result) => {
                 data::update((content.header, content.message));
-                // return HttpResponse::Ok().await;
+                message_sent = true;
             }
             Err(err) => {
+                data.lock().unwrap().clear_ack_callback();
                 return not_found_response(format!("Failed to send message: {err:?}")).await;
             }
         }
     }
 
-    if
-        let Ok(content) = json5::from_str::<data::MAVLinkMessage<mavlink::common::MavMessage>>(
-            &json_string
-        )
-    {
-        let content_ardupilotmega = mavlink::ardupilotmega::MavMessage::common(content.message);
-        match data.lock().unwrap().send(&content.header, &content_ardupilotmega) {
-            Ok(_result) => {
-                data::update((content.header, content_ardupilotmega));
-                //return HttpResponse::Ok().await;
-            }
-            Err(err) => {
-                return not_found_response(format!("Failed to send message: {err:?}")).await;
+    // If not ardupilotmega, try parsing as common message
+    if !message_sent {
+        if let Ok(content) = json5::from_str::<data::MAVLinkMessage<mavlink::common::MavMessage>>(&json_string) {
+            let content_ardupilotmega = mavlink::ardupilotmega::MavMessage::common(content.message);
+            match data.lock().unwrap().send(&content.header, &content_ardupilotmega) {
+                Ok(_result) => {
+                    data::update((content.header, content_ardupilotmega));
+                    message_sent = true;
+                }
+                Err(err) => {
+                    data.lock().unwrap().clear_ack_callback();
+                    return not_found_response(format!("Failed to send message: {err:?}")).await;
+                }
             }
         }
     }
 
-    /*
-    let start = Instant::now();
-    let end = Duration::from_secs(3);
-    let mut rece_msg = Vec::new();
-
-    while start.elapsed() < end {
-        let vehicle = data.lock().unwrap();
-        if let Some(msg) = vehicle.last_received() {
-            if !rece_msg.contains(&msg) {
-                rece_msg.push(msg.clone());
-                println!("New message received: {:?}", msg);
-            }
-        }
-    }*/
-
-    if let Some(ack) = data.lock().unwrap().last_received() {
-        return ok_response(format!("{:?}", ack)).await;
+    if !message_sent {
+        data.lock().unwrap().clear_ack_callback();
+        return not_found_response(String::from("Failed to parse message, not a valid MAVLinkMessage.")).await;
     }
 
-    not_found_response(String::from("Failed to parse message, not a valid MAVLinkMessage.")).await
+     // Wait for acknowledgment with timeout
+     let timeout = std::time::Duration::from_secs(1);
+     let start = std::time::Instant::now();
+     let check_interval = std::time::Duration::from_millis(50);
+ 
+     while start.elapsed() < timeout {
+         let ack = {
+             ack_received.lock().unwrap().clone()
+         };
+ 
+         if let Some(ack_message) = ack {
+             // Clear callback before returning
+             data.lock().unwrap().clear_ack_callback();
+             
+             match ack_message {
+                 mavlink::common::MavMessage::COMMAND_ACK(ack_data) => {
+                     return ok_response(format!("Command acknowledged: {:?}", ack_data)).await;
+                 }
+                 _ => {
+                     std::thread::sleep(check_interval);
+                 }
+             }
+         } else {
+             std::thread::sleep(check_interval);
+         }
+     }
+ 
+     // Clear callback before returning
+     data.lock().unwrap().clear_ack_callback();
+     
+     // If we got here, we timed out waiting for acknowledgment
+     ok_response("Message sent, but no acknowledgment received within timeout".to_string()).await
 }
+
 
 #[api_v2_operation]
 pub async fn mission_get(
@@ -453,25 +486,43 @@ pub async fn mission_get(
     let mission_request_list = mavlink::ardupilotmega::MavMessage::common(
         mavlink::common::MavMessage::MISSION_REQUEST_LIST(mission_request_list_data),
     );
+
+    let ack_received = Arc::new(Mutex::new(None));
+    let ack_received_clone = ack_received.clone();
+
+    // Set up callback before sending request
     {
-        let mavlink_vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
-        mavlink_vehicle.send(&mavlink::MavHeader::default(), &mission_request_list).map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to send mission request list: {}", e)))?;
+        let vehicle = data.lock().unwrap();
+        vehicle.set_ack_callback(move |msg| {
+            if let Ok(mut ack) = ack_received_clone.lock() {
+                *ack = Some(msg);
+            }
+        });
     }
 
-    let start = std::time::Instant::now();
+    // Send mission request list
+    {
+        let vehicle = data.lock().unwrap();
+        vehicle.send(&mavlink::MavHeader::default(), &mission_request_list).map_err(|e| 
+            actix_web::error::ErrorInternalServerError(format!("Failed to send mission request list: {}", e)))?;
+    }
+
+    // Wait for mission count
     let timeout = std::time::Duration::from_secs(5);
+    let start = std::time::Instant::now();
     let mut mission_count = 0;
+
     while start.elapsed() < timeout {
-        let last_message = {
-            let vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
-            vehicle.last_received()
-        };
-        if let Some(mavlink::common::MavMessage::MISSION_COUNT(count_data)) = last_message {
+        let ack = ack_received.lock().unwrap().clone();
+        if let Some(mavlink::common::MavMessage::MISSION_COUNT(count_data)) = ack {
             mission_count = count_data.count;
             break;
-        };
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
+
+    // Clear callback since we got what we needed
+    data.lock().unwrap().clear_ack_callback();
 
     if mission_count == 0 {
         return not_found_response("Failed to receive mission count".to_string()).await;
@@ -481,6 +532,19 @@ pub async fn mission_get(
 
     // Request and collect mission items
     for i in 0..mission_count {
+        let ack_received = Arc::new(Mutex::new(None));
+        let ack_received_clone = ack_received.clone();
+
+        // Set up callback for each item request
+        {
+            let vehicle = data.lock().unwrap();
+            vehicle.set_ack_callback(move |msg| {
+                if let Ok(mut ack) = ack_received_clone.lock() {
+                    *ack = Some(msg);
+                }
+            });
+        }
+
         let mission_request_int_data = mavlink::common::MISSION_REQUEST_INT_DATA {
             seq: i,
             target_component: 1,
@@ -494,29 +558,31 @@ pub async fn mission_get(
 
         // Send mission item request
         {
-            let vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
+            let vehicle = data.lock().unwrap();
             vehicle.send(&mavlink::MavHeader::default(), &mission_request_int)
                 .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to send mission item request: {}", e)))?;
         }
 
         // Wait for mission item
         let start_time = std::time::Instant::now();
-        while start_time.elapsed() < timeout {
-            let last_message = {
-                let vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
-                vehicle.last_received()
-            };
+        let mut item_received = false;
 
-            if let Some(mavlink::common::MavMessage::MISSION_ITEM_INT(item_data)) = last_message {
+        while start_time.elapsed() < timeout {
+            let ack = ack_received.lock().unwrap().clone();
+            if let Some(mavlink::common::MavMessage::MISSION_ITEM_INT(item_data)) = ack {
                 if item_data.seq == i {
                     mission_items.push(item_data);
+                    item_received = true;
                     break;
                 }
             }
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        if mission_items.len() != (i as usize + 1) {
+        // Clear callback after each item
+        data.lock().unwrap().clear_ack_callback();
+
+        if !item_received {
             return not_found_response(format!("Failed to receive mission item {}", i)).await;
         }
     }
@@ -526,35 +592,41 @@ pub async fn mission_get(
         "items": mission_items,
     });
 
-    ok_response(serde_json::to_string(&mission_data)
-        .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to serialize mission data: {}", e)))?)
-    .await
+    ok_response(
+        serde_json::to_string(&mission_data)
+            .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to serialize mission data: {}", e)))?
+    ).await
 }
 
 
 #[api_v2_operation]
 pub async fn mission_post(
-    data: web::Data<MAVLinkVehicleArcMutex>, // Changed to tokio::sync::Mutex
+    data: web::Data<MAVLinkVehicleArcMutex>,
     _req: HttpRequest,
     bytes: web::Bytes
 ) -> actix_web::Result<HttpResponse> {
-    let json_string = String::from_utf8(bytes.to_vec()).map_err(|e|
-        actix_web::error::ErrorBadRequest(format!("Invalid UTF-8 sequence: {}", e))
-    )?;
+    let json_string = String::from_utf8(bytes.to_vec())
+        .map_err(|e| actix_web::error::ErrorBadRequest(format!("Invalid UTF-8 sequence: {}", e)))?;
 
-    let mission_items: Vec<MissionItem> = serde_json
-        ::from_str(&json_string)
+    let mission_items: Vec<MissionItem> = serde_json::from_str(&json_string)
         .map_err(|e| actix_web::error::ErrorBadRequest(format!("JSON parsing error: {}", e)))?;
-
-    /* 
-    let target_locations: Vec<TargetLocation> = serde_json
-        ::from_str(&json_string)
-        .map_err(|e| actix_web::error::ErrorBadRequest(format!("JSON parsing error: {}", e)))?;
-    */
 
     info!("Received {} waypoints", mission_items.len());
 
-    // Create mission count message
+    let ack_received = Arc::new(Mutex::new(None));
+    let ack_received_clone = ack_received.clone();
+
+    // Set up initial callback for mission count acknowledgment
+    {
+        let vehicle = data.lock().unwrap();
+        vehicle.set_ack_callback(move |msg| {
+            if let Ok(mut ack) = ack_received_clone.lock() {
+                *ack = Some(msg);
+            }
+        });
+    }
+
+    // Create and send mission count message
     let mission_count = mavlink::common::MavMessage::MISSION_COUNT(
         mavlink::common::MISSION_COUNT_DATA {
             target_system: 1,
@@ -563,7 +635,7 @@ pub async fn mission_post(
             mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
         }
     );
-    // Send mission count
+
     {
         let vehicle = data.lock().unwrap();
         vehicle
@@ -571,56 +643,38 @@ pub async fn mission_post(
                 &mavlink::MavHeader::default(),
                 &mavlink::ardupilotmega::MavMessage::common(mission_count)
             )
-            .map_err(|e|
-                actix_web::error::ErrorInternalServerError(
-                    format!("Failed to send mission count: {}", e)
-                )
-            )?;
+            .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to send mission count: {}", e)))?;
     }
 
     // Loop for sending mission items
     for expected_seq in 0..=mission_items.len() {
-        let start_time = std::time::Instant::now();
         let timeout = Duration::from_secs(5);
+        let start_time = std::time::Instant::now();
+        let mut request_received = false;
 
         while start_time.elapsed() < timeout {
-            let last_message = {
-                let vehicle = data.lock().unwrap();
-                vehicle.last_received()
-            };
-
-            if let Some(mavlink::common::MavMessage::MISSION_REQUEST(request)) = last_message {
+            let ack = ack_received.lock().unwrap().clone();
+            if let Some(mavlink::common::MavMessage::MISSION_REQUEST(request)) = ack {
                 if request.seq == (expected_seq as u16) {
+                    request_received = true;
                     info!("Received MISSION_REQUEST for sequence number: {}", request.seq);
+
                     let message = if request.seq == 0 {
-                        // Home location (0th mission item)
                         info!("Sending home location (sequence 0)");
                         create_mission_item_int(
                             request.seq,
                             mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
                             mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT,
-                            0.0,
-                            0.0,
-                            0.0,
-                            0.0,
-                            0,
-                            0,
-                            0.0
+                            0.0, 0.0, 0.0, 0.0, 0, 0, 0.0
                         )
                     } else {
-                        // Target locations
                         let index = (request.seq as usize) - 1;
                         let item = &mission_items[index];
                         info!("Sending waypoint {} (sequence {})", index + 1, request.seq);
 
-                        // Convert u16 to MavCmd
-                        let mav_cmd = mavlink::common::MavCmd
-                            ::from_u16(item.command)
+                        let mav_cmd = mavlink::common::MavCmd::from_u16(item.command)
                             .unwrap_or_else(|| {
-                                warn!(
-                                    "Invalid command value: {}. Using MAV_CMD_NAV_WAYPOINT as default.",
-                                    item.command
-                                );
+                                warn!("Invalid command value: {}. Using MAV_CMD_NAV_WAYPOINT as default.", item.command);
                                 mavlink::common::MavCmd::MAV_CMD_NAV_WAYPOINT
                             });
 
@@ -628,15 +682,13 @@ pub async fn mission_post(
                             request.seq,
                             mavlink::common::MavFrame::MAV_FRAME_GLOBAL_RELATIVE_ALT,
                             mav_cmd,
-                            item.p1,
-                            item.p2,
-                            item.p3,
-                            item.p4,
+                            item.p1, item.p2, item.p3, item.p4,
                             (item.lat * 1e7) as i32,
                             (item.lon * 1e7) as i32,
                             item.alt
                         )
                     };
+
                     {
                         let vehicle = data.lock().unwrap();
                         vehicle
@@ -644,54 +696,53 @@ pub async fn mission_post(
                                 &mavlink::MavHeader::default(),
                                 &mavlink::ardupilotmega::MavMessage::common(message)
                             )
-                            .map_err(|e|
-                                actix_web::error::ErrorInternalServerError(
-                                    format!("Failed to send mission item: {}", e)
-                                )
-                            )?;
+                            .map_err(|e| actix_web::error::ErrorInternalServerError(
+                                format!("Failed to send mission item: {}", e)
+                            ))?;
                     }
 
-                    info!("Sent MISSION_ITEM_INT for sequence number: {}", request.seq);
+                    // Clear the ack after processing it
+                    if let Ok(mut ack) = ack_received.lock() {
+                        *ack = None;
+                    }
                     break;
                 }
             }
             std::thread::sleep(Duration::from_millis(100));
         }
+
+        if !request_received {
+            data.lock().unwrap().clear_ack_callback();
+            return Ok(HttpResponse::InternalServerError()
+                .body(format!("Timeout waiting for MISSION_REQUEST {}", expected_seq)));
+        }
     }
 
-    // Wait for MISSION_ACK outside the loop
-    let start_time = std::time::Instant::now();
+    // Wait for final MISSION_ACK
     let timeout = Duration::from_secs(5);
+    let start_time = std::time::Instant::now();
 
     while start_time.elapsed() < timeout {
-        let last_message = {
-            let vehicle = data.lock().unwrap();
-            vehicle.last_received()
-        };
+        let ack = ack_received.lock().unwrap().clone();
+        if let Some(mavlink::common::MavMessage::MISSION_ACK(ack_data)) = ack {
+            data.lock().unwrap().clear_ack_callback();
 
-        if let Some(mavlink::common::MavMessage::MISSION_ACK(ack)) = last_message {
-            if ack.mavtype == mavlink::common::MavMissionResult::MAV_MISSION_ACCEPTED {
+            if ack_data.mavtype == mavlink::common::MavMissionResult::MAV_MISSION_ACCEPTED {
                 info!("Received MISSION_ACK: Mission accepted");
                 return Ok(HttpResponse::Ok().body("Mission upload successful"));
             } else {
-                warn!("Received MISSION_ACK with error: {:?}", ack.mavtype);
-                return Ok(
-                    HttpResponse::BadRequest().body(
-                        format!("Mission upload failed: {:?}", ack.mavtype)
-                    )
-                );
+                warn!("Received MISSION_ACK with error: {:?}", ack_data.mavtype);
+                return Ok(HttpResponse::BadRequest()
+                    .body(format!("Mission upload failed: {:?}", ack_data.mavtype)));
             }
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    // If we've exited the loop without returning, it means we didn't receive a MISSION_ACK
+    data.lock().unwrap().clear_ack_callback();
     warn!("Mission upload incomplete: did not receive final acknowledgement");
-    Ok(
-        HttpResponse::InternalServerError().body(
-            "Mission upload incomplete: did not receive final acknowledgement"
-        )
-    )
+    Ok(HttpResponse::InternalServerError()
+        .body("Mission upload incomplete: did not receive final acknowledgement"))
 }
 
 fn create_mission_item_int(
