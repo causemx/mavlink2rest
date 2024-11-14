@@ -145,6 +145,7 @@ fn receive_message_loop<M: mavlink::Message + std::fmt::Debug + From<mavlink::co
                         mavlink::ardupilotmega::MavMessage::common(message) => {
                             match message {
                                 mavlink::common::MavMessage::COMMAND_ACK(_) |
+                                mavlink::common::MavMessage::HOME_POSITION(_)|
                                 mavlink::common::MavMessage::MISSION_ACK(_) |
                                 mavlink::common::MavMessage::MISSION_REQUEST(_) |
                                 mavlink::common::MavMessage::MISSION_COUNT(_) |

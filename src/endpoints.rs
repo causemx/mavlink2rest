@@ -455,6 +455,9 @@ pub async fn mavlink_post(
                  mavlink::common::MavMessage::COMMAND_ACK(ack_data) => {
                      return ok_response(format!("Command acknowledged: {:?}", ack_data)).await;
                  }
+                 mavlink::common::MavMessage::HOME_POSITION(home_data) => {
+                     return ok_response(format!("Current home position: {:?}", home_data)).await;
+                 }
                  _ => {
                      std::thread::sleep(check_interval);
                  }
@@ -473,7 +476,99 @@ pub async fn mavlink_post(
 
 
 #[api_v2_operation]
-pub async fn mission_get(
+#[allow(clippy::await_holding_lock)]
+/// Send a MAVLink message for the desired vehicle
+pub async fn set_home(
+    data: web::Data<MAVLinkVehicleArcMutex>,
+    _req: HttpRequest,
+    bytes: web::Bytes
+) -> actix_web::Result<HttpResponse> {
+    let json_string = match String::from_utf8(bytes.to_vec()) {
+        Ok(content) => content,
+        Err(err) => {
+            return not_found_response(
+                format!("Failed to parse input as UTF-8 string: {err:?}")
+            ).await;
+        }
+    };
+
+    debug!("MAVLink post received: {json_string}");
+
+     // Create a flag for acknowledgment received
+     let ack_received = Arc::new(Mutex::new(None));
+     let ack_received_clone = ack_received.clone();
+ 
+     // Set up the ack callback before sending the message
+     {
+         let vehicle = data.lock().unwrap();
+         vehicle.set_ack_callback(move |msg| {
+             if let Ok(mut ack) = ack_received_clone.lock() {
+                 *ack = Some(msg);
+             }
+         });
+     }
+
+       // Flag to track if we sent any message successfully
+    let mut message_sent = false;
+
+    // If not ardupilotmega, try parsing as common message
+    if !message_sent {
+        if let Ok(content) = json5::from_str::<data::MAVLinkMessage<mavlink::common::MavMessage>>(&json_string) {
+            let content_ardupilotmega = mavlink::ardupilotmega::MavMessage::common(content.message);
+            match data.lock().unwrap().send(&content.header, &content_ardupilotmega) {
+                Ok(_result) => {
+                    data::update((content.header, content_ardupilotmega));
+                    message_sent = true;
+                }
+                Err(err) => {
+                    data.lock().unwrap().clear_ack_callback();
+                    return not_found_response(format!("Failed to send message: {err:?}")).await;
+                }
+            }
+        }
+    }
+
+    if !message_sent {
+        data.lock().unwrap().clear_ack_callback();
+        return not_found_response(String::from("Failed to parse message, not a valid MAVLinkMessage.")).await;
+    }
+
+     // Wait for acknowledgment with timeout
+     let timeout = std::time::Duration::from_secs(1);
+     let start = std::time::Instant::now();
+     let check_interval = std::time::Duration::from_millis(50);
+ 
+     while start.elapsed() < timeout {
+         let ack = {
+             ack_received.lock().unwrap().clone()
+         };
+ 
+         if let Some(ack_message) = ack {
+             // Clear callback before returning
+             data.lock().unwrap().clear_ack_callback();
+             
+             match ack_message {
+                 mavlink::common::MavMessage::HOME_POSITION(home_data) => {
+                     return ok_response(format!("Current home position: {:?}", home_data)).await;
+                 }
+                 _ => {
+                     std::thread::sleep(check_interval);
+                 }
+             }
+         } else {
+             std::thread::sleep(check_interval);
+         }
+     }
+ 
+     // Clear callback before returning
+     data.lock().unwrap().clear_ack_callback();
+     
+     // If we got here, we timed out waiting for acknowledgment
+     ok_response("Message sent, but no acknowledgment received within timeout".to_string()).await
+}
+
+#[api_v2_operation]
+pub async fn get_mission(
     data: web::Data<MAVLinkVehicleArcMutex>,
     _req: HttpRequest,
 ) -> actix_web::Result<HttpResponse> {
@@ -600,7 +695,7 @@ pub async fn mission_get(
 
 
 #[api_v2_operation]
-pub async fn mission_post(
+pub async fn set_mission(
     data: web::Data<MAVLinkVehicleArcMutex>,
     _req: HttpRequest,
     bytes: web::Bytes
@@ -749,13 +844,8 @@ fn create_mission_item_int(
     seq: u16,
     frame: mavlink::common::MavFrame,
     command: mavlink::common::MavCmd,
-    p1: f32,
-    p2: f32,
-    p3: f32,
-    p4: f32,
-    x: i32,
-    y: i32,
-    z: f32
+    p1: f32, p2: f32, p3: f32, p4: f32,
+    x: i32, y: i32, z: f32
 ) -> mavlink::common::MavMessage {
     mavlink::common::MavMessage::MISSION_ITEM_INT(mavlink::common::MISSION_ITEM_INT_DATA {
         target_system: 1,
@@ -775,6 +865,7 @@ fn create_mission_item_int(
         mission_type: mavlink::common::MavMissionType::MAV_MISSION_TYPE_MISSION,
     })
 }
+
 
 #[api_v2_operation]
 /// Websocket used to receive and send MAVLink messages asynchronously
