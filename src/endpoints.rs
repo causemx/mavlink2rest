@@ -476,7 +476,6 @@ pub async fn mavlink_post(
 
 
 #[api_v2_operation]
-#[allow(clippy::await_holding_lock)]
 /// Send a MAVLink message for the desired vehicle
 pub async fn set_home(
     data: web::Data<MAVLinkVehicleArcMutex>,
@@ -565,6 +564,60 @@ pub async fn set_home(
      
      // If we got here, we timed out waiting for acknowledgment
      ok_response("Message sent, but no acknowledgment received within timeout".to_string()).await
+}
+
+#[api_v2_operation]
+pub async fn get_home(
+    data: web::Data<MAVLinkVehicleArcMutex>
+) -> actix_web::Result<HttpResponse> {
+
+    let request_home_data = mavlink::common::COMMAND_LONG_DATA {
+        target_component: 1, target_system: 1,
+        command: mavlink::common::MavCmd::MAV_CMD_REQUEST_MESSAGE,
+        confirmation: 0,
+        param1: 242 as f32, param2: 0.0,
+        param3: 0.0, param4: 0.0,
+        param5: 0.0, param6: 0.0,
+        param7: 0.0,
+    };
+
+    let request_home = mavlink::ardupilotmega::MavMessage::common(
+        mavlink::common::MavMessage::COMMAND_LONG(request_home_data));
+    
+    let ack_received = Arc::new(Mutex::new(None));
+    let ack_received_clone = ack_received.clone();
+
+    // Set up callback before sending request
+    {
+        let vehicle = data.lock().unwrap();
+        vehicle.set_ack_callback(move |msg| {
+            if let Ok(mut ack) = ack_received_clone.lock() {
+                *ack = Some(msg);
+            }
+        });
+    }
+
+    {
+        let vehicle = data.lock().unwrap();
+        vehicle.send(&mavlink::MavHeader::default(), &request_home).map_err(|e| 
+            actix_web::error::ErrorInternalServerError(format!("Failed to send mission request list: {}", e)))?;
+    }
+
+
+    let timeout = std::time::Duration::from_secs(5);
+    let start = std::time::Instant::now();
+
+    while start.elapsed() < timeout {
+        let ack = ack_received.lock().unwrap().clone();
+        if let Some(mavlink::common::MavMessage::HOME_POSITION(home_data)) = ack {
+            return ok_response(format!("Current home position: {:?}", home_data)).await;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Clear callback since we got what we needed
+    data.lock().unwrap().clear_ack_callback();
+    ok_response("Message sent, but no acknowledgment received within timeout".to_string()).await
 }
 
 #[api_v2_operation]
