@@ -4,6 +4,7 @@ mod endpoints;
 mod mavlink_vehicle;
 mod server;
 mod websocket_manager;
+mod group;
 
 use std::{ sync::{ Arc, Mutex }, thread };
 

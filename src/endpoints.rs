@@ -7,9 +7,12 @@ use regex::Regex;
 use serde::{ Deserialize, Serialize };
 use std::path::Path;
 
+use crate::group::SetLeaderRequest;
+
 use super::data;
 use super::mavlink_vehicle::MAVLinkVehicleArcMutex;
 use super::websocket_manager::WebsocketActor;
+use super::group::{ GROUP_MANAGER, CreateGroupRequest, UpdateGroupRequest, AddVehicleRequest };
 
 use log::*;
 use mavlink::{ common::PositionTargetTypemask, Message };
@@ -197,6 +200,104 @@ fn validate_auth_token(req: &HttpRequest) -> Result<(), &'static str> {
         Ok(())
     } else {
         Err("Invalid or expired token")
+    }
+}
+
+#[api_v2_operation]
+pub async fn create_group(req: web::Json<CreateGroupRequest>) -> actix_web::Result<HttpResponse> {
+    let group = GROUP_MANAGER.lock().unwrap().create_group(req.name.clone());
+    Ok(HttpResponse::Ok().json(group))
+}
+
+#[api_v2_operation]
+pub async fn delete_group(group_id: web::Path<String>) -> actix_web::Result<HttpResponse> {
+    match GROUP_MANAGER.lock().unwrap().delete_group(&group_id) {
+        Some(_) => Ok(HttpResponse::Ok().finish()),
+        None => Ok(HttpResponse::NotFound().finish()),
+    }
+}
+
+#[api_v2_operation]
+pub async fn update_group(
+    group_id: web::Path<String>,
+    req: web::Json<UpdateGroupRequest>
+) -> actix_web::Result<HttpResponse> {
+    match GROUP_MANAGER.lock().unwrap().update_group(&group_id, req.name.clone()) {
+        Some(group) => Ok(HttpResponse::Ok().json(group)),
+        None => Ok(HttpResponse::NotFound().finish()),
+    }
+}
+
+#[api_v2_operation]
+pub async fn list_groups() -> actix_web::Result<HttpResponse> {
+    let group_mana = GROUP_MANAGER.lock().unwrap();
+    let groups = group_mana.list_groups();
+    // let groups = GROUP_MANAGER.lock().unwrap().list_groups();
+    Ok(HttpResponse::Ok().json(groups))
+}
+
+#[api_v2_operation]
+pub async fn add_vehicle(
+    group_id: web::Path<String>,
+    req: web::Json<AddVehicleRequest>
+) -> actix_web::Result<HttpResponse> {
+    match
+        GROUP_MANAGER.lock()
+            .unwrap()
+            .add_vehicle(
+                &group_id,
+                req.name.clone(),
+                req.connection_string.clone(),
+                req.system_id,
+                req.component_id
+            )
+    {
+        Some(vehicle) => Ok(HttpResponse::Ok().json(vehicle)),
+        None => Ok(HttpResponse::NotFound().finish()),
+    }
+}
+
+#[api_v2_operation]
+pub async fn remove_vehicle(
+    params: web::Path<(String, String)>
+) -> actix_web::Result<HttpResponse> {
+    let (group_id, vehicle_id) = params.into_inner();
+    match GROUP_MANAGER.lock().unwrap().remove_vehicle(&group_id, &vehicle_id) {
+        Some(_) => Ok(HttpResponse::Ok().finish()),
+        None => Ok(HttpResponse::NotFound().finish()),
+    }
+}
+
+#[api_v2_operation]
+pub async fn list_vehicles(group_id: web::Path<String>) -> actix_web::Result<HttpResponse> {
+    match GROUP_MANAGER.lock().unwrap().list_vehicles(&group_id) {
+        Some(vehicles) => Ok(HttpResponse::Ok().json(vehicles)),
+        None => Ok(HttpResponse::NotFound().finish()),
+    }
+}
+
+#[api_v2_operation]
+pub async fn set_leader(
+    group_id: web::Path<String>,
+    req: web::Json<SetLeaderRequest>
+) -> actix_web::Result<HttpResponse> {
+    match GROUP_MANAGER.lock().unwrap().set_leader(&group_id, &req.vehicle_id) {
+        Some(true) =>
+            Ok(
+                HttpResponse::Ok()
+                    .content_type("application/json")
+                    .body(format!("leader has assigned to {}", req.vehicle_id))
+            ),
+        Some(false) => Ok(HttpResponse::BadRequest().finish()),
+        None => Ok(HttpResponse::NotFound().finish()),
+    }
+}
+
+#[api_v2_operation]
+pub async fn get_leader(group_id: web::Path<String>) -> actix_web::Result<HttpResponse> {
+    match GROUP_MANAGER.lock().unwrap().get_leader(&group_id) {
+        Some(vehicle) => Ok(HttpResponse::Ok().json(vehicle)),
+        None => Ok(HttpResponse::NotFound().finish()),
     }
 }
 
@@ -442,7 +543,7 @@ pub async fn mavlink_post(
 #[api_v2_operation]
 pub async fn mission_get(
     data: web::Data<MAVLinkVehicleArcMutex>,
-    _req: HttpRequest,
+    _req: HttpRequest
 ) -> actix_web::Result<HttpResponse> {
     let mission_request_list_data = mavlink::common::MISSION_REQUEST_LIST_DATA {
         target_component: 1,
@@ -451,11 +552,21 @@ pub async fn mission_get(
     };
 
     let mission_request_list = mavlink::ardupilotmega::MavMessage::common(
-        mavlink::common::MavMessage::MISSION_REQUEST_LIST(mission_request_list_data),
+        mavlink::common::MavMessage::MISSION_REQUEST_LIST(mission_request_list_data)
     );
     {
-        let mavlink_vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
-        mavlink_vehicle.send(&mavlink::MavHeader::default(), &mission_request_list).map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to send mission request list: {}", e)))?;
+        let mavlink_vehicle = data
+            .lock()
+            .map_err(|_|
+                actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle")
+            )?;
+        mavlink_vehicle
+            .send(&mavlink::MavHeader::default(), &mission_request_list)
+            .map_err(|e|
+                actix_web::error::ErrorInternalServerError(
+                    format!("Failed to send mission request list: {}", e)
+                )
+            )?;
     }
 
     let start = std::time::Instant::now();
@@ -463,13 +574,17 @@ pub async fn mission_get(
     let mut mission_count = 0;
     while start.elapsed() < timeout {
         let last_message = {
-            let vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
+            let vehicle = data
+                .lock()
+                .map_err(|_|
+                    actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle")
+                )?;
             vehicle.last_received()
         };
         if let Some(mavlink::common::MavMessage::MISSION_COUNT(count_data)) = last_message {
             mission_count = count_data.count;
             break;
-        };
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
 
@@ -489,21 +604,34 @@ pub async fn mission_get(
         };
 
         let mission_request_int = mavlink::ardupilotmega::MavMessage::common(
-            mavlink::common::MavMessage::MISSION_REQUEST_INT(mission_request_int_data),
+            mavlink::common::MavMessage::MISSION_REQUEST_INT(mission_request_int_data)
         );
 
         // Send mission item request
         {
-            let vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
-            vehicle.send(&mavlink::MavHeader::default(), &mission_request_int)
-                .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to send mission item request: {}", e)))?;
+            let vehicle = data
+                .lock()
+                .map_err(|_|
+                    actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle")
+                )?;
+            vehicle
+                .send(&mavlink::MavHeader::default(), &mission_request_int)
+                .map_err(|e|
+                    actix_web::error::ErrorInternalServerError(
+                        format!("Failed to send mission item request: {}", e)
+                    )
+                )?;
         }
 
         // Wait for mission item
         let start_time = std::time::Instant::now();
         while start_time.elapsed() < timeout {
             let last_message = {
-                let vehicle = data.lock().map_err(|_| actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle"))?;
+                let vehicle = data
+                    .lock()
+                    .map_err(|_|
+                        actix_web::error::ErrorInternalServerError("Failed to lock MAVLinkVehicle")
+                    )?;
                 vehicle.last_received()
             };
 
@@ -516,21 +644,27 @@ pub async fn mission_get(
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        if mission_items.len() != (i as usize + 1) {
+        if mission_items.len() != (i as usize) + 1 {
             return not_found_response(format!("Failed to receive mission item {}", i)).await;
         }
     }
 
-    let mission_data = serde_json::json!({
+    let mission_data =
+        serde_json::json!({
         "count": mission_count,
         "items": mission_items,
     });
 
-    ok_response(serde_json::to_string(&mission_data)
-        .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to serialize mission data: {}", e)))?)
-    .await
+    ok_response(
+        serde_json
+            ::to_string(&mission_data)
+            .map_err(|e|
+                actix_web::error::ErrorInternalServerError(
+                    format!("Failed to serialize mission data: {}", e)
+                )
+            )?
+    ).await
 }
-
 
 #[api_v2_operation]
 pub async fn mission_post(

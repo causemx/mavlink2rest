@@ -35,13 +35,15 @@ log = "0.4"
 env_logger = "0.11.5"
 mavlink = { version = "0.10.9", features = [ "ardupilotmega", "emit-extensions"] }
 paperclip = { version = "0.8", features = ["actix3", "v3", "paperclip-actix", "swagger-ui"] }
-regex = "1.10.6"
-serde = "1.0.115"
+regex = "1.11.1"
+serde = "1.0.215"
 serde_derive = "1.0.115"
 serde_json = "1.0.57"
 json5 = "0.4.1"
 jsonwebtoken = "9.3.0"
 num-traits = "0.2.19"
+sqlx = { version = "0.8.2", features = ["postgres"] }
+short-uuid = "0.1.4"
 
 [build-dependencies]
 reqwest = {version = "0.12.5", default-features = true, features = ["blocking", "rustls-tls"]}
